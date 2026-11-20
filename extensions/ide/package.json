@@ -1,0 +1,92 @@
+{
+  "name": "ag-toolkit",
+  "displayName": "Antigravity Assistant",
+  "description": "Быстрое переключение аккаунтов, мониторинг квот и статуса сети в строке состояния Antigravity IDE.",
+  "version": "1.2.0",
+  "publisher": "energystar",
+  "icon": "icon.png",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EnergyStario/antigravity-patcher"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "antigravity",
+    "account",
+    "switcher",
+    "gemini",
+    "claude"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agToolkit.openMenu",
+        "title": "Antigravity Assistant: Меню"
+      },
+      {
+        "command": "agToolkit.switchAccount",
+        "title": "Antigravity Assistant: Переключить аккаунт"
+      },
+      {
+        "command": "agToolkit.showQuota",
+        "title": "Antigravity Assistant: Квоты и лимиты аккаунта"
+      },
+      {
+        "command": "agToolkit.refreshQuotas",
+        "title": "Antigravity Assistant: Обновить актуальные лимиты всех аккаунтов онлайн"
+      },
+      {
+        "command": "agToolkit.refreshNetwork",
+        "title": "Antigravity Assistant: Обновить VPN и сеть"
+      },
+      {
+        "command": "agToolkit.openLogs",
+        "title": "Antigravity Assistant: Открыть лог работы"
+      },
+      {
+        "command": "agToolkit.checkUpdate",
+        "title": "Antigravity Assistant: Проверить обновления плагина (Cloud Update)"
+      },
+      {
+        "command": "agToolkit.set429Policy",
+        "title": "Antigravity Assistant: Режим при исчерпании квоты"
+      },
+      {
+        "command": "agToolkit.manageModels",
+        "title": "Antigravity Assistant: Доп. настройки моделей (сторонние API)"
+      },
+      {
+        "command": "agToolkit.runSwarm",
+        "title": "Antigravity Assistant: Команда агентов — новая задача"
+      },
+      {
+        "command": "agToolkit.resumeSwarm",
+        "title": "Antigravity Assistant: Команда агентов — задачи и статус"
+      },
+      {
+        "command": "agToolkit.stopSwarm",
+        "title": "Antigravity Assistant: Остановить команду агентов"
+      }
+    ],
+    "configuration": {
+      "title": "Antigravity Assistant",
+      "properties": {
+        "agToolkit.checkIntervalSeconds": {
+          "type": "number",
+          "default": 15,
+          "description": "Интервал обновления строки состояния (в секундах)."
+        }
+      }
+    }
+  }
+}

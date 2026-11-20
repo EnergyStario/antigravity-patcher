@@ -1,0 +1,124 @@
+name: Build & Publish Cross-Platform Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  package-vsix:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build VSIX and release notes
+        id: ver
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          mkdir -p release_out
+          PYTHONPATH=source python -c "
+          from pathlib import Path
+          from patcher.extension_installer import build_vsix_archive
+          build_vsix_archive(version='${VER}', out_path=Path('release_out/ag-toolkit-${VER}.vsix'))
+          "
+          python - << 'PY'
+          import os
+          import re
+          from pathlib import Path
+          ver = os.environ["GITHUB_REF_NAME"].lstrip("vV")
+          ch = Path("CHANGELOG.md").read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+          m = re.search(rf"^##\s+\[{re.escape(ver)}\][^\n]*\n([\s\S]*?)(?=^##\s+\[|\Z)", ch, flags=re.M)
+          notes = f"## v{ver}\n\n{m.group(1).strip()}\n" if m else f"Release v{ver}\n"
+          Path("release_out/RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-vsix
+          path: release_out/*
+
+  build-patcher:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin_name: Antigravity_Patcher_Windows_x64
+            artifact: Antigravity_Patcher_Windows_x64.exe
+            archive: false
+          - os: macos-latest
+            bin_name: Antigravity_Patcher_macOS_arm64
+            artifact: Antigravity_Patcher_macOS_arm64
+            archive: true
+          - os: ubuntu-latest
+            bin_name: Antigravity_Patcher_Linux_x64
+            artifact: Antigravity_Patcher_Linux_x64
+            archive: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip pyinstaller
+      - name: Build Patcher binary
+        shell: bash
+        run: |
+          mkdir -p dist_out
+          SEP=":"
+          ICON_OPT=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            SEP=";"
+            ICON_OPT="--icon ${GITHUB_WORKSPACE}/source/icon.ico --version-file ${GITHUB_WORKSPACE}/source/version.txt"
+          fi
+          pyinstaller --onefile --noupx --clean \
+            --name "${{ matrix.bin_name }}" \
+            ${ICON_OPT} \
+            --add-data "${GITHUB_WORKSPACE}/extensions${SEP}extensions" \
+            --add-data "${GITHUB_WORKSPACE}/source/patcher/swarm${SEP}swarm_engine/swarm" \
+            --distpath dist_out \
+            --workpath _work_tmp \
+            --specpath _work_tmp \
+            source/main.py
+          if [[ "${{ matrix.archive }}" == "true" ]]; then
+            chmod +x "dist_out/${{ matrix.artifact }}"
+            tar -czf "dist_out/${{ matrix.artifact }}.tar.gz" -C dist_out "${{ matrix.artifact }}"
+            rm -f "dist_out/${{ matrix.artifact }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patcher-${{ matrix.artifact }}
+          path: dist_out/*
+
+  publish-release:
+    needs: [package-vsix, build-patcher]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate SHA256SUMS.txt
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum $(ls -1 | grep -v '^RELEASE_NOTES\.md$' | grep -v '^SHA256SUMS\.txt$') > SHA256SUMS.txt
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ needs.package-vsix.outputs.version }}
+          body_path: artifacts/RELEASE_NOTES.md
+          files: |
+            artifacts/*
+            !artifacts/RELEASE_NOTES.md
+          draft: false
+          prerelease: false

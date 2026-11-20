@@ -1,0 +1,8 @@
+Windows (x64):
+pyinstaller --onefile --noupx --clean --icon=source/icon.ico --version-file=source/version.txt --name="Antigravity_Patcher_Windows_x64" --add-data "extensions;extensions" --add-data "source/patcher/swarm;swarm_engine/swarm" source/main.py
+
+Linux (x64):
+pyinstaller --onefile --noupx --clean --name="Antigravity_Patcher_Linux_x64" --add-data "extensions:extensions" --add-data "source/patcher/swarm:swarm_engine/swarm" source/main.py
+
+macOS (Apple Silicon / ARM64):
+pyinstaller --onefile --noupx --clean --name="Antigravity_Patcher_macOS_arm64" --add-data "extensions:extensions" --add-data "source/patcher/swarm:swarm_engine/swarm" source/main.py

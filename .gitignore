@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.spec
+
+# PyInstaller & Release Artifacts
+dist/
+build/
+_build_tmp/
+release_out/
+*.exe
+*.dll
+*.msi
+*.vsix
+*.zip
+*.tar.gz
+*.tgz
+*.7z
+
+# IDE
+.vscode/
+.idea/
+
+# Patcher state, logs, caches & backups
+*.agybak
+*.tlsbak
+*.bak
+*.old
+*.tmp
+*.log
+diagnostics_*.txt
+briefs.json
+reports/
+.agy_test_cache/
+agy-release-test-*/
+
+# Secrets & local runtime credentials
+.env
+.env.*
+oauth_creds.json
+oauth_clients.json
+google_accounts.json
+*.pem
+*.key
+
+# Agent customizations, local scratch & meta notes
+.agents/
+.agent/
+_agents/
+scratch/
+GEMINI.md
+ANTIGRAVITY_COMMANDS_GUIDE.md
+ROADMAP.md
+REPOSITORIES.md
+tools/
+test-agy/
+
+# Exclude desktop GUI from clean CLI/Extension release branch
+studio/
+studio/src-tauri/gen/
