@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import os
 import sys
 from pathlib import Path
@@ -595,5 +596,123 @@ console.log('OK');
     proc = subprocess.run(["node", "-e", script], env=env, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "OK" in proc.stdout
+
+
+def test_renderer_log_detection_and_ide_restricted_session_heal(tmp_path: Path, monkeypatch):
+    import sqlite3
+    from patcher import auto_repatch, diagnostics
+
+    monkeypatch.setenv("AG_TOOLS_DIR", str(tmp_path / "ag_tools"))
+    user_data = tmp_path / "Antigravity IDE"
+    monkeypatch.setenv("AG_IDE_USER_DATA_DIR", str(user_data))
+
+    ws_id = "1795154873881"
+    ws_dir = user_data / "User" / "workspaceStorage" / ws_id
+    ws_dir.mkdir(parents=True)
+    vscdb = ws_dir / "state.vscdb"
+    con = sqlite3.connect(str(vscdb))
+    con.execute("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+    con.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?, ?)",
+        ("memento/workspaceTrust", json.dumps({"isEmptyWorkspaceTrusted": False})),
+    )
+    con.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?, ?)",
+        ("antigravity.agentViewContainerId.state", json.dumps({"antigravity.panel": {"collapsed": False, "isHidden": True, "size": 759}})),
+    )
+    con.commit()
+    con.close()
+
+    g_dir = user_data / "User" / "globalStorage"
+    g_dir.mkdir(parents=True)
+    storage_file = g_dir / "storage.json"
+    storage_file.write_text(
+        json.dumps(
+            {
+                "backupWorkspaces": {"workspaces": [], "folders": [], "emptyWindows": [{"backupFolder": ws_id}]},
+                "windowsState": {
+                    "lastActiveWindow": {
+                        "backupPath": str(user_data / "Backups" / ws_id),
+                        "uiState": {"mode": 1, "x": 396, "y": 328, "width": 524, "height": 340},
+                    },
+                    "openedWindows": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rend_dir = user_data / "logs" / "20261120T172607" / "window1"
+    rend_dir.mkdir(parents=True)
+    rend_log = rend_dir / "renderer.log"
+    rend_log.write_text(
+        "2026-11-20 17:31:08.849 [error] command 'antigravity.handleAuthRefresh' not found\n",
+        encoding="utf-8",
+    )
+    # Simulate long-running Windows NTFS session dir whose folder mtime is >2h old while renderer.log is fresh
+    old_ts = os.path.getmtime(rend_log) - 7200
+    os.utime(user_data / "logs" / "20261120T172607", (old_ts, old_ts))
+
+    with mock.patch.object(diagnostics, "_get_log_base_dirs", return_value=[user_data / "logs"]), \
+         mock.patch.object(auto_repatch, "inspect_targets", return_value={"needs_any": False}), \
+         mock.patch.object(auto_repatch, "_append_log"), \
+         mock.patch("patcher.extension_installer.deploy_assistant_extension", return_value=True), \
+         mock.patch.object(diagnostics, "ensure_target_and_env_healthy", return_value={"connectivity_ok": True}), \
+         mock.patch.object(diagnostics, "_detect_running_antigravity_apps", return_value={"ide": True, "manager": True}), \
+         mock.patch.object(diagnostics, "_restart_antigravity_apps", return_value=["Antigravity IDE"]) as rest_mock:
+        res = diagnostics.run_autopilot_guardian(quiet=True, target_app="all")
+
+    assert "ide_session_healed" in res["actions"]
+    rest_mock.assert_called_once()
+    assert rest_mock.call_args.args[0] == {"ide": True, "manager": False}
+
+    con2 = sqlite3.connect(str(vscdb))
+    rows = dict(con2.execute("SELECT key, value FROM ItemTable").fetchall())
+    con2.close()
+    assert json.loads(rows["memento/workspaceTrust"])["isEmptyWorkspaceTrusted"] is True
+    assert json.loads(rows["antigravity.agentViewContainerId.state"])["antigravity.panel"]["isHidden"] is False
+
+    repaired_storage = json.loads(storage_file.read_text(encoding="utf-8"))
+    assert repaired_storage["backupWorkspaces"]["emptyWindows"] == []
+    assert repaired_storage["windowsState"]["lastActiveWindow"]["uiState"]["width"] == 1280
+    assert "backupPath" not in repaired_storage["windowsState"]["lastActiveWindow"]
+
+
+def test_sni_host_refused_rotates_pinned_ip_excluding_bad_node():
+    from patcher import diagnostics, hosts_pin
+
+    # 1. Verify hosts_pin.discover_sni_proxy_ip skips excluded IP
+    with mock.patch.object(hosts_pin, "DISCOVERY_RESOLVERS", []), \
+         mock.patch.object(hosts_pin, "VERIFIED_SNI_PROXIES", ["193.233.112.68", "193.233.112.67"]), \
+         mock.patch.object(hosts_pin, "test_tls_sni", return_value=True):
+        picked = hosts_pin.discover_sni_proxy_ip(exclude_ips={"193.233.112.68"})
+        assert picked == "193.233.112.67"
+
+    # 2. Verify KnownError sni_host_refused detects ECONNREFUSED on pinned IP and triggers rotation
+    err_db = diagnostics._make_error_db()
+    by_key = {ke.key: ke for ke in err_db}
+    sni_ke = by_key["sni_host_refused"]
+    sample_line = "2026-11-20 20:46:39.968 [error] [Auth] request failed, reason: connect ECONNREFUSED 193.233.112.68:443"
+    assert sni_ke.matches(sample_line)
+    # Must NOT match localhost proxies (handled by dead_proxy)
+    assert not sni_ke.matches("connect ECONNREFUSED 127.0.0.1:10808")
+
+    ctx = {"_hits_by_key": {"sni_host_refused": [f"[auth.log] {sample_line}"]}}
+    if sys.platform == "win32":
+        with mock.patch.object(hosts_pin, "is_hosts_pinned", return_value=(True, "193.233.112.68")), \
+             mock.patch.object(hosts_pin, "enable_hosts_pinning", return_value=(True, "ok")) as pin_mock, \
+             mock.patch.object(diagnostics, "_heal_google_connectivity", return_value={"connectivity_ok": True}):
+            assert sni_ke.is_already_fixed_fn(ctx) is False
+            assert sni_ke.fix_fn(ctx) is True
+            pin_mock.assert_called_once()
+            assert "193.233.112.68" in (pin_mock.call_args.kwargs.get("exclude_ips") or set())
+
+
+def test_ide_extension_manifest_supports_untrusted_workspaces():
+    pkg_path = Path(__file__).resolve().parent.parent / "extensions" / "ide" / "package.json"
+    pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+    caps = pkg.get("capabilities") or {}
+    assert (caps.get("untrustedWorkspaces") or {}).get("supported") is True
+
 
 

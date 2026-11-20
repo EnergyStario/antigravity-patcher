@@ -111,12 +111,19 @@ def test_tls_sni(ip: str, domain: str = "cloudcode-pa.googleapis.com", timeout: 
         return False
 
 
-def discover_sni_proxy_ip(fallback_ip: str = DEFAULT_FALLBACK_PROXY_IP) -> str:
+def discover_sni_proxy_ip(
+    fallback_ip: str = DEFAULT_FALLBACK_PROXY_IP,
+    exclude_ips: set[str] | tuple[str, ...] | list[str] | None = None,
+) -> str:
     """Discover a live working unblock SNI proxy IP via resolver pool with TLS verification."""
+    excluded = {str(x).strip() for x in (exclude_ips or ()) if str(x).strip()}
+
     # 1. Probe dynamic discovery resolvers
     for resolver in DISCOVERY_RESOLVERS:
         candidate_ips = resolve_domain_udp(resolver, "daily-cloudcode-pa.googleapis.com", timeout=2.0)
         for cand in candidate_ips:
+            if cand in excluded:
+                continue
             try:
                 ipaddress.ip_address(cand)
                 # Filter out standard Google IPs and bogons
@@ -128,11 +135,17 @@ def discover_sni_proxy_ip(fallback_ip: str = DEFAULT_FALLBACK_PROXY_IP) -> str:
 
     # 2. Probe pool of verified Google Cloud ESF frontends
     for proxy in VERIFIED_SNI_PROXIES:
+        if proxy in excluded:
+            continue
         if test_tls_sni(proxy, "daily-cloudcode-pa.googleapis.com", timeout=1.5) and test_tls_sni(proxy, "cloudcode-pa.googleapis.com", timeout=1.5):
             return proxy
 
-    if test_tls_sni(fallback_ip, "cloudcode-pa.googleapis.com", timeout=2.0):
+    if fallback_ip not in excluded and test_tls_sni(fallback_ip, "cloudcode-pa.googleapis.com", timeout=2.0):
         return fallback_ip
+
+    for proxy in VERIFIED_SNI_PROXIES:
+        if test_tls_sni(proxy, "cloudcode-pa.googleapis.com", timeout=1.5):
+            return proxy
 
     return fallback_ip
 
@@ -182,7 +195,10 @@ def is_hosts_pinned() -> tuple[bool, str]:
         return False, ""
 
 
-def enable_hosts_pinning(proxy_ip: str | None = None) -> tuple[bool, str]:
+def enable_hosts_pinning(
+    proxy_ip: str | None = None,
+    exclude_ips: set[str] | tuple[str, ...] | list[str] | None = None,
+) -> tuple[bool, str]:
     """
     Write direct SNI proxy routes into the OS hosts file.
     Works seamlessly whether VPN is enabled or disabled.
@@ -190,7 +206,7 @@ def enable_hosts_pinning(proxy_ip: str | None = None) -> tuple[bool, str]:
     hosts_file = get_hosts_path()
     effective_ip = (proxy_ip or "").strip()
     if not effective_ip:
-        effective_ip = discover_sni_proxy_ip()
+        effective_ip = discover_sni_proxy_ip(exclude_ips=exclude_ips)
 
     try:
         ipaddress.ip_address(effective_ip)

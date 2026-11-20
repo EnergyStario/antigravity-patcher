@@ -573,6 +573,204 @@ def _make_error_db() -> List[KnownError]:
             err(f"Не удалось восстановить базу данных SQLite: {e}")
             return False
 
+    def _extract_refused_sni_ips(hits: list) -> set[str]:
+        ips: set[str] = set()
+        for h in hits or ():
+            for m in re.finditer(r"connect\s+ECONNREFUSED\s+(?!127\.0\.0\.1)(\d{1,3}(?:\.\d{1,3}){3}):443", str(h)):
+                ips.add(m.group(1))
+        return ips
+
+    def _is_sni_host_refused_fixed(ctx):
+        bad_ips = _extract_refused_sni_ips(ctx.get("_hits_by_key", {}).get("sni_host_refused", []))
+        if sys.platform == "win32" and bad_ips:
+            try:
+                from patcher.hosts_pin import is_hosts_pinned
+                hosts_act, pinned_ip = is_hosts_pinned()
+                if hosts_act and pinned_ip in bad_ips:
+                    return False
+            except Exception:
+                pass
+        return bool(_check_cloudcode_cached(ctx).get("reachable"))
+
+    def _fix_sni_host_refused(ctx):
+        ctx.pop("_live_conn_cache", None)
+        bad_ips = _extract_refused_sni_ips(ctx.get("_hits_by_key", {}).get("sni_host_refused", []))
+        if sys.platform == "win32":
+            try:
+                from patcher.hosts_pin import enable_hosts_pinning, is_hosts_pinned
+                hosts_act, pinned_ip = is_hosts_pinned()
+                if hosts_act and (not bad_ips or pinned_ip in bad_ips):
+                    excl = bad_ips | ({pinned_ip} if pinned_ip and pinned_ip != "active" else set())
+                    ok_hp, msg_hp = enable_hosts_pinning(exclude_ips=excl)
+                    _flush_dns_safe()
+                    if ok_hp:
+                        ok(f"Выполнена ротация SNI-маршрута hosts: {msg_hp}")
+                    else:
+                        warn(f"Не удалось переключить SNI-IP в hosts: {msg_hp}")
+            except Exception as ex_sni:
+                warn(f"Ошибка ротации SNI-маршрута: {ex_sni}")
+        heal = _heal_google_connectivity(ctx=ctx, quiet=False)
+        return bool(heal.get("connectivity_ok"))
+
+    def _get_ide_user_data_dir() -> Optional[Path]:
+        override = os.environ.get("AG_IDE_USER_DATA_DIR", "").strip()
+        if override:
+            p = Path(override)
+            return p if p.is_dir() else None
+        if os.name == "nt":
+            appdata = os.environ.get("APPDATA", "")
+            cand = Path(appdata) / "Antigravity IDE" if appdata else None
+        elif sys.platform == "darwin":
+            cand = Path.home() / "Library" / "Application Support" / "Antigravity IDE"
+        else:
+            cand = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "Antigravity IDE"
+        return cand if (cand and cand.is_dir()) else None
+
+    def _inspect_ide_session_issues(user_dir: Path) -> dict:
+        import json as _json
+        import sqlite3 as _sqlite3
+
+        issues: dict[str, Any] = {"vscd_targets": [], "fix_storage": False, "backup_ids": set()}
+        storage_file = user_dir / "User" / "globalStorage" / "storage.json"
+        if storage_file.is_file():
+            try:
+                sdata = _json.loads(storage_file.read_text(encoding="utf-8", errors="ignore"))
+                if isinstance(sdata, dict):
+                    win_state = sdata.get("windowsState") or {}
+                    last_win = win_state.get("lastActiveWindow") if isinstance(win_state, dict) else None
+                    if isinstance(last_win, dict) and not last_win.get("folder") and not last_win.get("workspace"):
+                        ui = last_win.get("uiState") if isinstance(last_win.get("uiState"), dict) else {}
+                        bp = str(last_win.get("backupPath") or "")
+                        if bp:
+                            issues["backup_ids"].add(Path(bp).name)
+                        if (ui.get("width", 1280) < 700 and ui.get("height", 800) < 450) or bp:
+                            issues["fix_storage"] = True
+            except Exception:
+                pass
+
+        ws_root = user_dir / "User" / "workspaceStorage"
+        if ws_root.is_dir():
+            for ws_dir in ws_root.iterdir():
+                if not ws_dir.is_dir():
+                    continue
+                if (ws_dir / "workspace.json").is_file():
+                    continue
+                vscdb = ws_dir / "state.vscdb"
+                if not vscdb.is_file():
+                    continue
+                if issues["backup_ids"] and ws_dir.name not in issues["backup_ids"] and not ws_dir.name.isdigit():
+                    continue
+                try:
+                    con = _sqlite3.connect(str(vscdb), timeout=2.0)
+                    rows = dict(
+                        con.execute(
+                            "SELECT key, value FROM ItemTable WHERE key IN "
+                            "('memento/workspaceTrust', 'antigravity.agentViewContainerId.state')"
+                        ).fetchall()
+                    )
+                    con.close()
+                except Exception:
+                    continue
+                needs_trust = False
+                needs_panel = False
+                raw_trust = rows.get("memento/workspaceTrust")
+                if raw_trust:
+                    try:
+                        td = _json.loads(raw_trust)
+                        if isinstance(td, dict) and td.get("isEmptyWorkspaceTrusted") is False:
+                            needs_trust = True
+                    except Exception:
+                        pass
+                raw_panel = rows.get("antigravity.agentViewContainerId.state")
+                if raw_panel:
+                    try:
+                        pd = _json.loads(raw_panel)
+                        if isinstance(pd, dict) and isinstance(pd.get("antigravity.panel"), dict) and pd["antigravity.panel"].get("isHidden") is True:
+                            needs_panel = True
+                    except Exception:
+                        pass
+                if needs_trust or needs_panel:
+                    issues["vscd_targets"].append((vscdb, needs_trust, needs_panel))
+        return issues
+
+    def _is_ide_session_blocked_fixed(ctx) -> bool:
+        user_dir = _get_ide_user_data_dir()
+        if not user_dir:
+            return True
+        issues = _inspect_ide_session_issues(user_dir)
+        return not issues["vscd_targets"] and not issues["fix_storage"]
+
+    def _fix_ide_session_blocked(ctx) -> bool:
+        import json as _json
+        import sqlite3 as _sqlite3
+
+        user_dir = _get_ide_user_data_dir()
+        changed = False
+        if user_dir:
+            issues = _inspect_ide_session_issues(user_dir)
+            for vscdb, needs_trust, needs_panel in issues["vscd_targets"]:
+                try:
+                    con = _sqlite3.connect(str(vscdb), timeout=3.0)
+                    if needs_trust:
+                        cur_val = con.execute("SELECT value FROM ItemTable WHERE key='memento/workspaceTrust'").fetchone()
+                        td = _json.loads(cur_val[0]) if cur_val and cur_val[0] else {}
+                        if isinstance(td, dict):
+                            td["isEmptyWorkspaceTrusted"] = True
+                            con.execute(
+                                "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+                                ("memento/workspaceTrust", _json.dumps(td, separators=(",", ":"))),
+                            )
+                            changed = True
+                    if needs_panel:
+                        cur_p = con.execute("SELECT value FROM ItemTable WHERE key='antigravity.agentViewContainerId.state'").fetchone()
+                        pd = _json.loads(cur_p[0]) if cur_p and cur_p[0] else {}
+                        if isinstance(pd, dict) and isinstance(pd.get("antigravity.panel"), dict):
+                            pd["antigravity.panel"]["isHidden"] = False
+                            con.execute(
+                                "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+                                ("antigravity.agentViewContainerId.state", _json.dumps(pd, separators=(",", ":"))),
+                            )
+                            changed = True
+                    con.commit()
+                    con.close()
+                except Exception as ex_db:
+                    warn(f"Не удалось обновить workspaceTrust/panel ({vscdb.name}): {ex_db}")
+
+            storage_file = user_dir / "User" / "globalStorage" / "storage.json"
+            if issues["fix_storage"] and storage_file.is_file():
+                try:
+                    sdata = _json.loads(storage_file.read_text(encoding="utf-8", errors="ignore"))
+                    if isinstance(sdata, dict):
+                        win_state = sdata.get("windowsState")
+                        if isinstance(win_state, dict) and isinstance(win_state.get("lastActiveWindow"), dict):
+                            lw = win_state["lastActiveWindow"]
+                            if not lw.get("folder") and not lw.get("workspace"):
+                                ui = lw.get("uiState")
+                                if isinstance(ui, dict) and ui.get("width", 1280) < 700 and ui.get("height", 800) < 450:
+                                    ui["width"] = 1280
+                                    ui["height"] = 800
+                                    changed = True
+                                if lw.pop("backupPath", None):
+                                    changed = True
+                        bw = sdata.get("backupWorkspaces")
+                        if isinstance(bw, dict) and isinstance(bw.get("emptyWindows"), list) and bw["emptyWindows"]:
+                            bw["emptyWindows"] = []
+                            changed = True
+                        if changed:
+                            storage_file.write_text(_json.dumps(sdata, indent=4, ensure_ascii=False), encoding="utf-8")
+                except Exception as ex_st:
+                    warn(f"Не удалось очистить состояние пустого окна storage.json: {ex_st}")
+
+        try:
+            from patcher.extension_installer import deploy_assistant_extension
+            deploy_assistant_extension()
+        except Exception:
+            pass
+
+        if changed:
+            ok("Восстановлен доверенный режим пустой сессии Antigravity IDE и панель агента.")
+        return True
+
     def _is_user_location_400_fixed(ctx):
         loc_keys = ("user_location_400", "is_google_internal")
         p = _get_ide_path(ctx) if _should_touch_app(ctx, "ide", loc_keys) else None
@@ -735,6 +933,39 @@ def _make_error_db() -> List[KnownError]:
             is_already_fixed_fn=_is_dns_lookup_fixed,
             severity="ERROR",
             menu_button="[14] Selective DNS & Routing",
+        ),
+        KnownError(
+            key="sni_host_refused",
+            title="Сброс соединения прибитого SNI-сервера (ECONNREFUSED :443)",
+            patterns=[
+                r"connect\s+ECONNREFUSED\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443",
+            ],
+            description=(
+                "Закреплённый в hosts SNI-прокси отклонил подключение к порту 443. "
+                "Требуется автоматическая ротация на другой живой IP-узел из пула."
+            ),
+            fix_label="Переключить hosts на другой рабочий SNI-узел и сбросить DNS-кэш",
+            fix_fn=_fix_sni_host_refused,
+            is_already_fixed_fn=_is_sni_host_refused_fixed,
+            severity="ERROR",
+            menu_button="[14] Selective DNS & Routing",
+        ),
+        KnownError(
+            key="ide_session_blocked",
+            title="Блокировка расширений IDE в Restricted Mode / битой пустой сессии",
+            patterns=[
+                r"command\s+'antigravity\.handleAuthRefresh'\s+not\s+found",
+                r"\[createInstance\]\s+\w+\s+depends\s+on\s+UNKNOWN\s+service\s+agentSessions",
+            ],
+            description=(
+                "Antigravity IDE запустилась в пустом недоверенном окне (Restricted Mode) или со сломанным "
+                "состоянием редактора: встроенное расширение google.google-antigravity и ag-toolkit не активируются."
+            ),
+            fix_label="Включить доверие пустой сессии IDE, открыть панель агента и переустановить ag-toolkit",
+            fix_fn=_fix_ide_session_blocked,
+            is_already_fixed_fn=_is_ide_session_blocked_fixed,
+            severity="ERROR",
+            menu_button="[18] Install Antigravity Assistant",
         ),
         KnownError(
             key="resource_exhausted_429",
@@ -1002,6 +1233,7 @@ _CRITICAL_SIGNAL_RE = re.compile(
     r"proxyconnect|no such host|ERR_PROXY_CONNECTION_FAILED|ERR_NAME_NOT_RESOLVED|"
     r"ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|wsarecv|dial tcp|EOF|loadCodeAssist|"
     r"Singleflight refresh failed|Failed to refresh|Auth.*Error|not been initialized|"
+    r"handleAuthRefresh|UNKNOWN service agentSessions|agentSidePanel|"
     r"\bineligible\b|SET_INELIGIBLE|available in your location|ineligibleTiers|"
     r"CERT_HAS_EXPIRED|DEPTH_ZERO_SELF_SIGNED_CERT|\[LAUNCH ERROR\]",
     re.IGNORECASE,
@@ -1013,6 +1245,7 @@ _COLLECT_KEYWORD_RE = re.compile(
     r"proxyconnect|no such host|ERR_PROXY_CONNECTION_FAILED|ERR_NAME_NOT_RESOLVED|"
     r"ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|wsarecv|dial tcp|EOF|loadCodeAssist|"
     r"Singleflight refresh failed|Failed to refresh|Auth.*Error|not been initialized|"
+    r"handleAuthRefresh|UNKNOWN service agentSessions|agentSidePanel|"
     r"loginError|\bineligible\b|SET_INELIGIBLE|available in your location|unable to get local issuer",
     re.IGNORECASE,
 )
@@ -1085,9 +1318,13 @@ def _collect_log_lines_tagged(
                 extra_logs.sort(key=lambda f: f.stat().st_mtime, reverse=True)
             log_files_ordered.extend(extra_logs[:5])
 
-            # Вложенные логи extension host (window1/exthost/exthost.log, output_logging_*/2-Antigravity*.log)
+            # Вложенные логи extension host и renderer (window1/renderer.log, window1/exthost/exthost.log, output_logging_*/2-Antigravity*.log)
             if session != base:
-                for pattern in ("window*/exthost/exthost.log", "window*/exthost/output_logging_*/*Antigravity*.log"):
+                for pattern in (
+                    "window*/renderer.log",
+                    "window*/exthost/exthost.log",
+                    "window*/exthost/output_logging_*/*Antigravity*.log",
+                ):
                     for f in sorted(session.glob(pattern)):
                         if f.is_file() and _is_recent_file(f) and f not in log_files_ordered:
                             log_files_ordered.append(f)
@@ -1457,12 +1694,14 @@ def do_diagnostics(main_js_path: str = "", manager_path: str = "", agy_path: str
     _runtime_keys = {
         "tls_expired",
         "dead_proxy",
+        "sni_host_refused",
         "dns_lookup_fail",
         "user_location_400",
         "is_google_internal",
         "auth_failure",
         "ls_not_initialized",
         "cache_refresh_fail",
+        "ide_session_blocked",
     }
 
     if fixable:
@@ -2378,7 +2617,7 @@ def _collect_fresh_log_delta(
                     if f.is_file() and f.suffix == ".log" and f.stat().st_mtime >= cutoff:
                         candidate_files.append((base.name, f, app_tag))
                 sessions = sorted(
-                    [d for d in base.iterdir() if d.is_dir() and d.stat().st_mtime >= cutoff],
+                    [d for d in base.iterdir() if d.is_dir()],
                     key=lambda d: d.stat().st_mtime,
                     reverse=True,
                 )[:2]
@@ -2387,7 +2626,11 @@ def _collect_fresh_log_delta(
                         p = sess / name
                         if p.is_file() and p.stat().st_mtime >= cutoff:
                             candidate_files.append((sess.name, p, app_tag))
-                    for pattern in ("window*/exthost/exthost.log", "window*/exthost/output_logging_*/*Antigravity*.log"):
+                    for pattern in (
+                        "window*/renderer.log",
+                        "window*/exthost/exthost.log",
+                        "window*/exthost/output_logging_*/*Antigravity*.log",
+                    ):
                         for p in sess.glob(pattern):
                             if p.is_file() and p.stat().st_mtime >= cutoff:
                                 candidate_files.append((sess.name, p, app_tag))
@@ -2570,10 +2813,10 @@ def run_autopilot_guardian(
                 actions.append(f"repatch:{','.join(rep['patched'])}")
 
         # 2. Verify local environment & Google TLS connectivity (throttled when healthy & no fresh errors)
-        _net_tls_keys = {"tls_expired", "dead_proxy", "dns_lookup_fail", "auth_failure", "cache_refresh_fail", "ls_not_initialized"}
+        _net_tls_keys = {"tls_expired", "dead_proxy", "sni_host_refused", "dns_lookup_fail", "auth_failure", "cache_refresh_fail", "ls_not_initialized"}
         _loc_400_keys = {"user_location_400", "is_google_internal"}
         _env_error_keys = _net_tls_keys | _loc_400_keys
-        _fatal_restart_keys = {"tls_expired", "dead_proxy", "dns_lookup_fail", "user_location_400", "is_google_internal"}
+        _fatal_restart_keys = {"tls_expired", "dead_proxy", "sni_host_refused", "dns_lookup_fail", "user_location_400", "is_google_internal", "ide_session_blocked"}
 
         net_ready = bool(fresh_keys & _net_tls_keys) and _cooldown_ready("net_tls", 300)
         loc_ready = bool(fresh_keys & _loc_400_keys) and _cooldown_ready("loc_400", 300)
@@ -2656,6 +2899,25 @@ def run_autopilot_guardian(
             if heal2.get("changed"):
                 actions.append("net_tls_healed" if net_ready else ("loc_400_healed" if loc_ready else "connectivity_healed"))
                 _mark_broken_app_restarts(include_all_on_empty=True)
+
+        if "sni_host_refused" in fresh_keys and _cooldown_ready("sni_refused", 120):
+            _mark_cooldown("sni_refused")
+            sni_err = next((k for k in found_fresh if k.key == "sni_host_refused"), None)
+            sni_ctx = {"_hits_by_key": {"sni_host_refused": list(sni_err.hits) if sni_err else []}}
+            if sni_err and sni_err.is_already_fixed_fn and not sni_err.is_already_fixed_fn(sni_ctx):
+                if sni_err.fix_fn:
+                    _run_silent(sni_err.fix_fn, sni_ctx)
+                actions.append("sni_rotated")
+                _mark_broken_app_restarts(include_all_on_empty=True)
+
+        if "ide_session_blocked" in fresh_keys and t_scope in ("all", "ide") and _cooldown_ready("ide_session", 300):
+            _mark_cooldown("ide_session")
+            sess_err = next((k for k in found_fresh if k.key == "ide_session_blocked"), None)
+            if sess_err and sess_err.is_already_fixed_fn and not sess_err.is_already_fixed_fn({}):
+                if sess_err.fix_fn:
+                    _run_silent(sess_err.fix_fn, {})
+                actions.append("ide_session_healed")
+                restart_apps["ide"] = True
 
         # Do NOT force-kill/reset running Antigravity on 429 quota limits from background autopilot.
         if "sqlite_corrupt" in fresh_keys and _cooldown_ready("sqlite", 1800):
