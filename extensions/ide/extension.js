@@ -82,6 +82,11 @@ let _failoverToastLastShownAt = 0;    // throttle: max 1 toast per 60 s
 let _failoverLogWatchers = [];         // fs.watch handles on LS log dirs
 let _failoverLogDebounceTimer = null;
 let _failoverLogPollTimer = null;      // periodic fallback poll (Windows fs.watch buffers)
+let _startupUpdateTimer = null;
+let _startupChecksumTimer = null;
+let _startupLogWatchTimer = null;
+let _startupActiveQuotaTimer = null;
+let _startupAllQuotasTimer = null;
 let _failoverLogLastOffset = new Map(); // path -> bytesRead (avoid re-scanning)
 
 // Paths
@@ -229,14 +234,14 @@ function activate(context) {
     checkForUpdatesOnStartup();
 
     // Background quota refreshes using pure-Node Keep-Alive engine with cross-process cooldown
-    const _tActiveQ = setTimeout(() => {
+    _startupActiveQuotaTimer = setTimeout(() => {
         refreshActiveQuotaBackground({ minAgeSec: 12, ignoreFocus: true });
     }, 600);
-    if (typeof _tActiveQ.unref === 'function') _tActiveQ.unref();
-    const _tAllQ = setTimeout(() => {
+    if (typeof _startupActiveQuotaTimer.unref === 'function') _startupActiveQuotaTimer.unref();
+    _startupAllQuotasTimer = setTimeout(() => {
         refreshQuotasBackground({ minAgeSec: 90, ignoreFocus: true });
     }, 2500);
-    if (typeof _tAllQ.unref === 'function') _tAllQ.unref();
+    if (typeof _startupAllQuotasTimer.unref === 'function') _startupAllQuotasTimer.unref();
 
     activeQuotaTimer = setInterval(() => {
         if (isWindowFocused()) {
@@ -270,13 +275,13 @@ function activate(context) {
     );
 
     // Defer checksum verification off startup critical path (non-blocking async I/O)
-    const _startupChecksumTimer = setTimeout(() => {
+    _startupChecksumTimer = setTimeout(() => {
         repairProductChecksums().catch(() => {});
     }, 3500);
     if (typeof _startupChecksumTimer.unref === 'function') _startupChecksumTimer.unref();
 
     // 429 Failover Engine & Scoped IDE Error Guardian
-    const _startupLogWatchTimer = setTimeout(() => {
+    _startupLogWatchTimer = setTimeout(() => {
         setup429LogWatchers();
         setupIdeErrorGuardian();
     }, 4000);
@@ -284,14 +289,7 @@ function activate(context) {
 
     context.subscriptions.push({
         dispose: () => {
-            clearTimeout(_startupChecksumTimer);
-            clearTimeout(_startupLogWatchTimer);
-            if (checkTimer) { clearInterval(checkTimer); checkTimer = null; }
-            if (activeQuotaTimer) { clearInterval(activeQuotaTimer); activeQuotaTimer = null; }
-            if (quotaTimer) { clearInterval(quotaTimer); quotaTimer = null; }
-            disposeFileWatchers();
-            dispose429LogWatchers();
-            disposeIdeErrorGuardian();
+            deactivate();
         }
     });
 }
@@ -2277,7 +2275,8 @@ function isNewerVersion(remote, local) {
  * Silent non-intrusive check for updates on startup
  */
 function checkForUpdatesOnStartup() {
-    setTimeout(async () => {
+    if (_startupUpdateTimer) { clearTimeout(_startupUpdateTimer); _startupUpdateTimer = null; }
+    _startupUpdateTimer = setTimeout(async () => {
         try {
             const currentVer = '1.2.0';
             const https = require('https');
@@ -2329,6 +2328,7 @@ function checkForUpdatesOnStartup() {
             }
         } catch (e) {}
     }, 3000);
+    if (typeof _startupUpdateTimer.unref === 'function') _startupUpdateTimer.unref();
 }
 
 /**
@@ -5482,17 +5482,28 @@ async function stopSwarmCommand() {
     }
 }
 
-function deactivate() {
+function _clearAllExtensionTimers() {
+    if (_startupUpdateTimer) { clearTimeout(_startupUpdateTimer); _startupUpdateTimer = null; }
+    if (_startupChecksumTimer) { clearTimeout(_startupChecksumTimer); _startupChecksumTimer = null; }
+    if (_startupLogWatchTimer) { clearTimeout(_startupLogWatchTimer); _startupLogWatchTimer = null; }
+    if (_startupActiveQuotaTimer) { clearTimeout(_startupActiveQuotaTimer); _startupActiveQuotaTimer = null; }
+    if (_startupAllQuotasTimer) { clearTimeout(_startupAllQuotasTimer); _startupAllQuotasTimer = null; }
     if (checkTimer) { clearInterval(checkTimer); checkTimer = null; }
     if (activeQuotaTimer) { clearInterval(activeQuotaTimer); activeQuotaTimer = null; }
     if (quotaTimer) { clearInterval(quotaTimer); quotaTimer = null; }
+}
+
+function deactivate() {
+    _clearAllExtensionTimers();
     stopSwarmLiveTicker();
     disposeFileWatchers();
     dispose429LogWatchers();
+    disposeIdeErrorGuardian();
     stopSwarm({ keepOutput: false });
 }
 
 function _resetStateForTests() {
+    _clearAllExtensionTimers();
     lastKnownAccountData = null;
     lastConnectionInfo = { ok: false, ms: 0, countryCode: '', status: 'Проверка...' };
     lastProxyInfo = null;

@@ -1446,7 +1446,13 @@ def print_found_errors(found: List[KnownError], ctx: Optional[dict] = None):
 
 def save_report(found: List[KnownError], log_lines: List[Tuple[str, str, str]]) -> str:
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out = Path.cwd() / f"diagnostics_{ts}.txt"
+    env_tools = os.environ.get("AG_TOOLS_DIR", "").strip()
+    logs_dir = (Path(env_tools) if env_tools else (Path.home() / ".antigravity_tools")) / "logs"
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        out = logs_dir / f"diagnostics_{ts}.txt"
+    except Exception:
+        out = Path.cwd() / f"diagnostics_{ts}.txt"
 
     lines_out = [
         "==================================================================",

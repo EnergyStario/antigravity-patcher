@@ -207,14 +207,12 @@ _LS_PRE_BLOCK = r"""    // AG_TOOLKIT_LS_PRE_START
 
 _LS_ENV_BLOCK = r"""        // AG_TOOLKIT_LS_ENV_START
         try {
-            env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
             env.AGY_PROXY_STRICT_SSL = 'false';
             env.NO_PROXY = 'localhost,127.0.0.1,::1';
             env.no_proxy = 'localhost,127.0.0.1,::1';
             env.GODEBUG = env.GODEBUG
                 ? (env.GODEBUG.includes('http2client=') ? env.GODEBUG : env.GODEBUG + ',http2client=0')
                 : 'http2client=0';
-            process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
             process.env.AGY_PROXY_STRICT_SSL = 'false';
             process.env.NO_PROXY = 'localhost,127.0.0.1,::1';
             process.env.no_proxy = 'localhost,127.0.0.1,::1';

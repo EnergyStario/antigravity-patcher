@@ -59,7 +59,7 @@ _OAUTH_CLIENT_ID_RE = re.compile(rb"[0-9]{10,}-[A-Za-z0-9_-]+\.apps\.googleuserc
 _OAUTH_SECRET_PREFIX = b"GOC" + b"SPX-"
 _OAUTH_SECRET_FULL_RE = re.compile(_OAUTH_SECRET_PREFIX + rb"[A-Za-z0-9_-]{28}")
 
-SSL_CTX = ssl._create_unverified_context()
+SSL_CTX = ssl.create_default_context()
 
 
 def _atomic_write_json(path: Path, data: dict | list) -> None:

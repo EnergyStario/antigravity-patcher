@@ -5720,6 +5720,7 @@ ext.activate(ctx);
     ext.deactivate();
     ext._resetStateForTests();
     console.log(JSON.stringify({{ ok: true }}));
+    process.exit(0);
 }})().catch(err => {{
     console.error(err);
     process.exit(1);
@@ -6525,3 +6526,46 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
         # 4. data_reset handles EOFError gracefully
         with mock.patch("builtins.input", side_effect=EOFError()):
             self.assertEqual(data_reset._choose_app([("A", Path("a")), ("B", Path("b"))], None), (None, None))
+
+        # 5. save_report writes into AG_TOOLS_DIR/logs rather than cwd
+        from patcher import diagnostics
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            with mock.patch.dict(os.environ, {"AG_TOOLS_DIR": str(td_p)}):
+                rep_p = Path(diagnostics.save_report([], []))
+            self.assertTrue(rep_p.is_file())
+            self.assertEqual(rep_p.parent, td_p / "logs")
+
+        # 6. First-run startup autopilot auto-launches strictly ONE primary app when neither was running
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            fake_mjs = td_p / "Antigravity IDE" / "resources" / "app" / "out" / "main.js"
+            fake_mjs.parent.mkdir(parents=True, exist_ok=True)
+            fake_mjs.write_text("// main", encoding="utf-8")
+            fake_mgr = td_p / "antigravity" / "resources" / "bin" / "language_server.exe"
+            fake_mgr.parent.mkdir(parents=True, exist_ok=True)
+            fake_mgr.write_bytes(b"ls")
+
+            launched = []
+            seq_auto = iter(["0"])
+            with mock.patch.object(sys, "argv", ["cli.py"]), \
+                 mock.patch.dict(os.environ, {"AG_DISABLE_STARTUP_AUTOPILOT": "0", "APPDATA": str(td_p)}), \
+                 mock.patch.object(cli, "find_install_root", return_value=str(td_p / "Antigravity IDE")), \
+                 mock.patch.object(cli, "find_main_js", return_value=str(fake_mjs)), \
+                 mock.patch.object(cli, "find_manager_binary", return_value=str(fake_mgr)), \
+                 mock.patch.object(cli, "find_agy_binary", return_value=""), \
+                 mock.patch.object(cli, "find_extension_js", return_value=""), \
+                 mock.patch.object(cli, "find_gemini_antigravity_binary", return_value=""), \
+                 mock.patch.object(cli, "redraw_main_screen"), \
+                 mock.patch.object(cli, "start_background_update_checks"), \
+                 mock.patch("patcher.utils.update.auto_update_on_startup"), \
+                 mock.patch("patcher.auto_repatch.inspect_targets", return_value={"needs_any": True}), \
+                 mock.patch("patcher.auto_repatch.run_auto_repatch", return_value={"changed": True, "restarted": []}), \
+                 mock.patch("patcher.utils.launcher.detect_running_antigravity_apps", return_value={"ide": False, "manager": False}), \
+                 mock.patch.object(cli, "_run_env_heal"), \
+                 mock.patch.object(cli, "launch_application", side_effect=lambda k, p: launched.append((k, p)) or True), \
+                 mock.patch("patcher.ide.patcher.ensure_agy_backend_patched"), \
+                 mock.patch("builtins.input", side_effect=lambda *_a, **_kw: next(seq_auto)):
+                cli.run_cli()
+            self.assertEqual(len(launched), 1, f"Expected strictly one app launched, got: {launched}")
+            self.assertEqual(launched[0][0], "ide")

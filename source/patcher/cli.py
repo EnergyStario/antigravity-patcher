@@ -886,12 +886,39 @@ def run_cli():
         except Exception:
             pass
 
+    def _pick_single_primary_target() -> tuple[str, str]:
+        """Choose strictly ONE installed app to auto-open on clean first-run autopilot."""
+        has_ide = bool(main_js_path and os.path.isfile(main_js_path))
+        has_mgr = bool(manager_path and os.path.isfile(manager_path))
+        if has_ide and not has_mgr:
+            return "ide", main_js_path
+        if has_mgr and not has_ide:
+            return "manager", manager_path
+        if not has_ide and not has_mgr:
+            return "", ""
+        # Both installed: prefer whichever had more recent user activity, defaulting to IDE
+        try:
+            from pathlib import Path
+            appdata = os.environ.get("APPDATA", "")
+            ide_log_dir = Path(appdata) / "Antigravity IDE" / "logs" if appdata else None
+            mgr_log_dir = Path(appdata) / "Antigravity" / "logs" if appdata else None
+            ide_mtime = max((p.stat().st_mtime for p in ide_log_dir.iterdir()), default=0.0) if (ide_log_dir and ide_log_dir.is_dir()) else 0.0
+            mgr_mtime = max((p.stat().st_mtime for p in mgr_log_dir.iterdir()), default=0.0) if (mgr_log_dir and mgr_log_dir.is_dir()) else 0.0
+            if mgr_mtime > ide_mtime and mgr_mtime > 0.0 and ide_mtime == 0.0:
+                return "manager", manager_path
+            if mgr_mtime > ide_mtime + 60.0:
+                return "manager", manager_path
+        except Exception:
+            pass
+        return "ide", main_js_path
+
     # Full Autopilot on startup: patch missing targets synchronously, and run network/DNS/watcher healing
     # asynchronously in a daemon thread so the CMD menu opens instantaneously without freezing.
     _run_bg_watcher_sync = True
     if any([main_js_path, manager_path, agy_path, vscode_path, vscode_agy_path]) and os.environ.get("AG_DISABLE_STARTUP_AUTOPILOT") != "1":
         try:
             from patcher.auto_repatch import inspect_targets, run_auto_repatch
+            from patcher.utils.launcher import detect_running_antigravity_apps
             _st = inspect_targets(
                 main_js_path=main_js_path,
                 manager_path=manager_path,
@@ -901,14 +928,32 @@ def run_cli():
             )
             if _st.get("needs_any"):
                 info("Автопилот: обнаружены неподготовленные компоненты — применяю исправления автоматически...")
-                run_auto_repatch(
+                _was_open = detect_running_antigravity_apps()
+                _rep = run_auto_repatch(
                     restart_running=True,
                     main_js_path=main_js_path,
                     manager_path=manager_path,
                     agy_path=agy_path,
                     vscode_path=vscode_path,
                     vscode_agy_path=vscode_agy_path,
+                ) or {}
+                _run_env_heal(
+                    target="all",
+                    quiet=True,
+                    main_js_path=main_js_path,
+                    manager_path=manager_path,
+                    agy_path=agy_path,
                 )
+                if not _was_open.get("ide") and not _was_open.get("manager") and not _rep.get("restarted"):
+                    _prim_key, _prim_path = _pick_single_primary_target()
+                    if _prim_key and _prim_path:
+                        if launch_application(_prim_key, _prim_path):
+                            if _prim_key == "ide":
+                                try:
+                                    from patcher.ide.patcher import ensure_agy_backend_patched
+                                    ensure_agy_backend_patched(wait_seconds=3.0)
+                                except Exception:
+                                    pass
                 invalidate_menu_status_cache()
                 _TARGET_STATUS_CACHE.clear()
                 _run_bg_watcher_sync = False
