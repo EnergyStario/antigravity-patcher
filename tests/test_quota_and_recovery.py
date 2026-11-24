@@ -4025,7 +4025,7 @@ class PatcherCliBackNavigationTests(unittest.TestCase):
             recorded_rows.append((str(num), str(label), str(desc)))
             return orig_row(num, label, desc, *args, **kwargs)
 
-        with mock.patch.object(sys, "argv", ["cli.py"]), mock.patch.object(
+        with mock.patch.dict(os.environ, {"AG_LANG": "en"}), mock.patch.object(sys, "argv", ["cli.py"]), mock.patch.object(
             cli, "find_install_root", return_value=""
         ), mock.patch.object(cli, "find_manager_binary", return_value=""), mock.patch.object(
             cli, "find_agy_binary", return_value=""
@@ -6177,7 +6177,7 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
             try:
                 cli._DISK_CACHE_LOADED = False
                 cli._TARGET_STATUS_CACHE.clear()
-                with mock.patch.object(cli, "_status_cache_file", return_value=cache_file):
+                with mock.patch.dict(os.environ, {"AG_LANG": "en"}), mock.patch.object(cli, "_status_cache_file", return_value=cache_file):
                     badge1 = cli._cached_target_badge("CLI", str(target_bin), _checker)
                     self.assertEqual(calls, 1)
                     self.assertTrue(cache_file.is_file())
@@ -6569,3 +6569,42 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
                 cli.run_cli()
             self.assertEqual(len(launched), 1, f"Expected strictly one app launched, got: {launched}")
             self.assertEqual(launched[0][0], "ide")
+
+    def test_i18n_persistence_and_cli_language_toggle(self):
+        """RU/EN localization persists to config.json, respects AG_LANG/--lang, and toggles live via 21 / L."""
+        from patcher import cli
+        from patcher.utils import i18n
+
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            cfg_file = td_p / "config.json"
+            cfg_file.write_text(json.dumps({"existing_key": 42}), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"AG_TOOLS_DIR": str(td_p)}, clear=False):
+                os.environ.pop("AG_LANG", None)
+                self.assertEqual(i18n.set_lang("ru"), "ru")
+                self.assertEqual(i18n.get_lang(), "ru")
+                self.assertEqual(i18n.tr("Exit", "Выход"), "Выход")
+
+                saved = json.loads(cfg_file.read_text(encoding="utf-8"))
+                self.assertEqual(saved["lang"], "ru")
+                self.assertEqual(saved["existing_key"], 42)
+
+                self.assertEqual(i18n.toggle_lang(), "en")
+                self.assertEqual(i18n.tr("Exit", "Выход"), "Exit")
+
+                # CLI option "21" toggles EN -> RU without pause, "l" toggles RU -> EN
+                seq = iter(["21", "l", "0"])
+                with mock.patch.object(sys, "argv", ["cli.py", "--lang", "en"]), \
+                     mock.patch.object(cli, "find_install_root", return_value=""), \
+                     mock.patch.object(cli, "find_manager_binary", return_value=""), \
+                     mock.patch.object(cli, "find_agy_binary", return_value=""), \
+                     mock.patch.object(cli, "find_extension_js", return_value=""), \
+                     mock.patch.object(cli, "find_gemini_antigravity_binary", return_value=""), \
+                     mock.patch.object(cli, "redraw_main_screen"), \
+                     mock.patch.object(cli, "pause") as pause_mock, \
+                     mock.patch("patcher.auto_repatch.sync_auto_repatch_state"), \
+                     mock.patch("builtins.input", side_effect=lambda *_a, **_kw: next(seq)):
+                    cli.run_cli()
+                pause_mock.assert_not_called()
+                self.assertEqual(i18n.get_lang(), "en")

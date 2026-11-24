@@ -20,6 +20,7 @@ from patcher.utils.console import (
     print_menu_section, print_menu_row, print_menu_footer,
     COLOR_CYAN, COLOR_RED, COLOR_YELLOW, COLOR_BOLD, COLOR_DIM, COLOR_WHITE,
 )
+from patcher.utils.i18n import tr
 
 SAFE_CACHE_DIRS = (
     "CachedData",
@@ -203,13 +204,13 @@ def _choose_app(available: List[Tuple[str, Path]],
         for n, p in available:
             if preferred_name.lower() in n.lower():
                 return n, p
-    print(color("  Select application to reset:", COLOR_WHITE, COLOR_BOLD))
+    print(color(tr("  Select application to reset:", "  Выберите приложение для очистки кэша:"), COLOR_WHITE, COLOR_BOLD))
     for i, (n, p) in enumerate(available, 1):
         print_menu_row(str(i), n, _dir_size_str(p), COLOR_CYAN)
-    print_menu_row("0", "Back / Cancel", "Enter / 0 / b", COLOR_DIM)
-    print_menu_footer("0 / Enter / b — Back to main menu")
+    print_menu_row("0", tr("Back / Cancel", "Назад / Отмена"), tr("Enter / 0 / b", "Enter / 0 / b"), COLOR_DIM)
+    print_menu_footer(tr("0 / Enter / b — Back to main menu", "0 / Enter / b — Назад в главное меню"))
     print()
-    sel = _safe_input(color("  Select > ", COLOR_CYAN, COLOR_BOLD), default="0")
+    sel = _safe_input(color(tr("  Select > ", "  Выбор > "), COLOR_CYAN, COLOR_BOLD), default="0")
     if sel.lstrip("\x1b") in ("0", "", "b", "q", "quit", "exit", "back", "\u043d\u0430\u0437\u0430\u0434"):
         return None, None
     try:
@@ -391,57 +392,69 @@ def _reset_single_target(
 ) -> Optional[bool]:
     """Terminate running target if needed and wipe disposable caches safely."""
     print()
-    info(f"Target : {color(str(target_path), COLOR_CYAN)}")
-    info(f"Size   : {color(_dir_size_str(target_path), COLOR_WHITE)}")
+    info(f"{tr('Target', 'Цель')} : {color(str(target_path), COLOR_CYAN)}")
+    info(f"{tr('Size', 'Размер')} : {color(_dir_size_str(target_path), COLOR_WHITE)}")
     print()
 
     running = _is_ide_running(target_name)
     if running:
-        warn(f"Process '{running}' is currently running!")
+        warn(tr(f"Process '{running}' is currently running!", f"Процесс '{running}' сейчас запущен!"))
         if auto_confirm:
-            info(f"Auto-closing '{running}' before safe cache cleanup...")
+            info(tr(f"Auto-closing '{running}' before safe cache cleanup...",
+                    f"Закрываю '{running}' перед безопасной очисткой кэша..."))
             if _kill_ide(running):
-                ok(f"Process '{running}' terminated.")
+                ok(tr(f"Process '{running}' terminated.", f"Процесс '{running}' завершён."))
                 import time
                 time.sleep(1.5)
             else:
-                warn(f"Could not terminate '{running}' cleanly; cleaning unlocked caches.")
+                warn(tr(f"Could not terminate '{running}' cleanly; cleaning unlocked caches.",
+                        f"Не удалось закрыть '{running}'; очищаю доступные кэши."))
         else:
-            warn(f"You should close {target_name} before cleaning caches.")
+            warn(tr(f"You should close {target_name} before cleaning caches.",
+                    f"Рекомендуется закрыть {target_name} перед очисткой кэша."))
             print()
-            choice = _safe_input(color(f"  Kill '{running}' now? [y/N] > ", COLOR_YELLOW), default="n")
+            choice = _safe_input(color(tr(f"  Kill '{running}' now? [y/N] > ",
+                                          f"  Завершить '{running}' сейчас? [y/N] > "), COLOR_YELLOW), default="n")
             if choice in ("y", "yes", "д", "да"):
                 if _kill_ide(running):
-                    ok(f"Process '{running}' terminated.")
+                    ok(tr(f"Process '{running}' terminated.", f"Процесс '{running}' завершён."))
                     import time
                     time.sleep(2)
                 else:
-                    err("Could not kill the process. Please close it manually.")
+                    err(tr("Could not kill the process. Please close it manually.",
+                           "Не удалось завершить процесс. Закройте приложение вручную."))
                     return None
             else:
-                cancel(f"Please close {target_name} and try again.")
+                cancel(tr(f"Please close {target_name} and try again.",
+                          f"Закройте {target_name} и повторите попытку."))
                 return False
 
     if not auto_confirm:
         print()
-        info("This will clean ONLY temporary caches (CachedData, Code Cache, GPUCache)")
-        info("and broken AppCompatFlags/IFEO registry entries. settings.json & chats stay intact.")
+        info(tr("This will clean ONLY temporary caches (CachedData, Code Cache, GPUCache)",
+                "Будут удалены ТОЛЬКО временные кэши (CachedData, Code Cache, GPUCache)"))
+        info(tr("and broken AppCompatFlags/IFEO registry entries. settings.json & chats stay intact.",
+                "и сломанные флаги совместимости реестра. settings.json и чаты НЕ затрагиваются."))
         print()
-        confirm = _safe_input(color(f"  Confirm safe cleanup for '{target_name}'? [y/N] > ", COLOR_YELLOW, COLOR_BOLD), default="n")
+        confirm = _safe_input(color(tr(
+            f"  Confirm safe cleanup for '{target_name}'? [y/N] > ",
+            f"  Подтвердить безопасную очистку '{target_name}'? [y/N] > ",
+        ), COLOR_YELLOW, COLOR_BOLD), default="n")
         if confirm not in ("y", "yes", "д", "да"):
-            cancel("Cancelled -- no changes made.")
+            cancel(tr("Cancelled -- no changes made.", "Отменено -- изменения не внесены."))
             return False
 
     print()
     cleaned_caches = clean_target_caches(target_path)
     if cleaned_caches:
-        step(f"Cleaned caches ({target_name})", True, ", ".join(cleaned_caches))
+        step(tr(f"Cleaned caches ({target_name})", f"Очищены кэши ({target_name})"), True, ", ".join(cleaned_caches))
     else:
-        step(f"Caches ({target_name})", None, "already clean")
+        step(tr(f"Caches ({target_name})", f"Кэши ({target_name})"), None, tr("already clean", "уже чисто"))
 
     settings_file = target_path / "User" / "settings.json"
     if settings_file.is_file():
-        step("User/settings.json", True, "preserved (update lock & settings intact)")
+        step("User/settings.json", True, tr("preserved (update lock & settings intact)",
+                                            "сохранён (настройки и lock обновлений на месте)"))
     return True
 
 
@@ -456,23 +469,29 @@ def do_data_reset(
     auto_confirm: when True, runs zero-prompt autopilot cleanup across selected/all targets.
     Returns True on completed cleanup, False when cancelled by user, None on error.
     """
-    print_menu_section("SAFE CACHE & REGISTRY CLEANUP  --  PRESERVE SETTINGS")
+    print_menu_section(tr("SAFE CACHE & REGISTRY CLEANUP  --  PRESERVE SETTINGS",
+                          "БЕЗОПАСНАЯ ОЧИСТКА КЭША И РЕЕСТРА  --  НАСТРОЙКИ СОХРАНЯЮТСЯ"))
     print()
-    info("Performs safe targeted cache cleanup (CachedData, Code Cache, GPUCache)")
-    info("and cleans broken Windows compatibility/IFEO registry flags.")
-    info("User/settings.json, update lock, accounts and chats are 100% PRESERVED.")
+    info(tr("Performs safe targeted cache cleanup (CachedData, Code Cache, GPUCache)",
+            "Безопасно очищает временные кэши (CachedData, Code Cache, GPUCache)"))
+    info(tr("and cleans broken Windows compatibility/IFEO registry flags.",
+            "и удаляет сломанные флаги совместимости Windows в реестре."))
+    info(tr("User/settings.json, update lock, accounts and chats are 100% PRESERVED.",
+            "User/settings.json, блокировка обновлений, аккаунты и чаты полностью СОХРАНЯЮТСЯ."))
     print()
 
     available = _get_data_dirs()
     if not available:
-        err("No Antigravity IDE / Antigravity 2.0 data folders found.")
+        err(tr("No Antigravity IDE / Antigravity 2.0 data folders found.",
+               "Папки данных Antigravity IDE / Antigravity 2.0 не найдены."))
         if os.name == "nt":
-            hint(r"  Expected: %APPDATA%\Antigravity IDE  or  %APPDATA%\Antigravity")
+            hint(tr(r"  Expected: %APPDATA%\Antigravity IDE  or  %APPDATA%\Antigravity",
+                    r"  Ожидались: %APPDATA%\Antigravity IDE  или  %APPDATA%\Antigravity"))
         return None
 
     targets = _resolve_reset_targets(available, app_name, auto_confirm=auto_confirm)
     if not targets:
-        cancel("Cancelled.")
+        cancel(tr("Cancelled.", "Отменено."))
         return False
 
     did_any = False
@@ -487,12 +506,15 @@ def do_data_reset(
 
     reg_res = clean_compat_and_ifeo_registry()
     if reg_res["compat_removed"]:
-        step("Cleaned AppCompatFlags", True, f"{len(reg_res['compat_removed'])} entry(s)")
+        step(tr("Cleaned AppCompatFlags", "Очищены AppCompatFlags"), True,
+             tr(f"{len(reg_res['compat_removed'])} entry(s)", f"записей: {len(reg_res['compat_removed'])}"))
     if reg_res["ifeo_removed"]:
-        step("Cleaned stale IFEO", True, f"{len(reg_res['ifeo_removed'])} entry(s)")
+        step(tr("Cleaned stale IFEO", "Очищены устаревшие IFEO"), True,
+             tr(f"{len(reg_res['ifeo_removed'])} entry(s)", f"записей: {len(reg_res['ifeo_removed'])}"))
 
     print()
     if did_any:
-        ok("Safe cache & registry cleanup complete.")
-    hint("Tip: for HTTP 429 quota limits, switch accounts in the Antigravity status bar / Assistant.")
+        ok(tr("Safe cache & registry cleanup complete.", "Безопасная очистка кэша и реестра завершена."))
+    hint(tr("Tip: for HTTP 429 quota limits, switch accounts in the Antigravity status bar / Assistant.",
+            "Совет: при лимите HTTP 429 переключайте аккаунт в статус-баре / Antigravity Assistant."))
     return True if did_any else None

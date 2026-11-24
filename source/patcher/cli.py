@@ -34,6 +34,7 @@ from patcher.utils.console import (
 )
 
 from patcher.utils.file import file_size, format_bytes
+from patcher.utils.i18n import tr, toggle_lang, get_lang, set_lang, SUPPORTED_LANGS
 from patcher.utils.update import check_for_updates, open_releases_page, print_update_status_notice
 
 from patcher.ide.discovery import (
@@ -136,7 +137,12 @@ def _has_win_console_stdin() -> bool:
         return False
 
 
-def pause(prompt="  Press Enter (or any key) to return to menu..."):
+def pause(prompt=None):
+    if prompt is None:
+        prompt = tr(
+            "  Press Enter (or any key) to return to menu...",
+            "  Нажмите Enter (или любую клавишу) для возврата в меню...",
+        )
     if prompt:
         print(color(prompt, COLOR_DIM), end="", flush=True)
     if _has_win_console_stdin():
@@ -170,7 +176,7 @@ def print_launch_examples():
     macos_example = f'{cmd} "/Applications/Antigravity IDE.app"'
     linux_example = f'{cmd} "/usr/share/antigravity-ide"'
 
-    hint("Usage examples with custom path:")
+    hint(tr("Usage examples with custom path:", "Примеры запуска с указанием пути:"))
     print(f"      Windows: {color(windows_example, COLOR_YELLOW)}")
     print(f"      macOS:   {color(macos_example, COLOR_YELLOW)}")
     print(f"      Linux:   {color(linux_example, COLOR_YELLOW)}")
@@ -181,7 +187,7 @@ def print_path_examples():
     macos_path = "/Applications/Antigravity IDE.app"
     linux_path = "/usr/share/antigravity-ide"
 
-    hint("Path examples:")
+    hint(tr("Path examples:", "Примеры пути:"))
     print(f"      Windows: {color(windows_path, COLOR_YELLOW)}")
     print(f"      macOS:   {color(macos_path, COLOR_YELLOW)}")
     print(f"      Linux:   {color(linux_path, COLOR_YELLOW)}")
@@ -217,12 +223,14 @@ def _read_console_line(prompt):
 _BACK_CHOICES = {"0", "", "b", "back", "q", "quit", "exit", "\x1b", "назад"}
 
 
-def _read_menu_input(prompt="\n  Select option > ", default_on_eof="0"):
+def _read_menu_input(prompt=None, default_on_eof="0"):
+    if prompt is None:
+        prompt = tr("\n  Select option > ", "\n  Выберите пункт > ")
     try:
         raw = input(color(prompt, COLOR_CYAN, COLOR_BOLD))
     except (EOFError, KeyboardInterrupt):
         return default_on_eof
-    cleaned = str(raw).strip().lower()
+    cleaned = str(raw).lstrip("\ufeff").strip().lower()
     if cleaned.startswith("\x1b"):
         cleaned = cleaned.lstrip("\x1b") or "0"
     return cleaned
@@ -253,32 +261,35 @@ def confirmed(question):
 
 
 def offer_download_and_block(software_name="Antigravity", target_type=None):
-    err(f"{software_name} path is not set or software is not installed.")
-    err("Patching attempt blocked.")
-    hint(f"Download URL: {color(DOWNLOAD_URL, COLOR_CYAN)}")
+    err(tr(f"{software_name} path is not set or software is not installed.",
+           f"Путь к {software_name} не задан или программа не установлена."))
+    err(tr("Patching attempt blocked.", "Попытка пропатчивания остановлена."))
+    hint(f"{tr('Download URL', 'Ссылка для скачивания')}: {color(DOWNLOAD_URL, COLOR_CYAN)}")
     print()
-    print_menu_row("1", "Open download page in browser", DOWNLOAD_URL, COLOR_GREEN)
-    print_menu_row("2", f"Specify path to installed {software_name}", "manual path selection", COLOR_CYAN)
-    print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
+    print_menu_row("1", tr("Open download page in browser", "Открыть страницу загрузки"), DOWNLOAD_URL, COLOR_GREEN)
+    print_menu_row("2", tr(f"Specify path to {software_name}", f"Указать путь к {software_name}"),
+                   tr("manual path selection", "выбор папки или файла вручную"), COLOR_CYAN)
+    print_menu_row("0", tr("Back to main menu", "Назад в главное меню"), "Enter / 0 / b", COLOR_RED)
     print()
 
-    action = _read_menu_input("  Select option > ")
+    action = _read_menu_input(tr("  Select option > ", "  Выберите пункт > "))
     if action in _BACK_CHOICES:
         global _last_offer_cancelled
         _last_offer_cancelled = True
-        cancel("Cancelled.")
+        cancel(tr("Cancelled.", "Отменено."))
         return None
     elif action == "1":
         webbrowser.open(DOWNLOAD_URL)
-        ok(f"Opening: {color(DOWNLOAD_URL, COLOR_CYAN)}")
+        ok(f"{tr('Opening', 'Открываю')}: {color(DOWNLOAD_URL, COLOR_CYAN)}")
         return None
     elif action == "2":
         print()
-        hint(f"Enter the path to {software_name} (or 0 / Enter / b to cancel).")
+        hint(tr(f"Enter the path to {software_name} (or 0 / Enter / b to cancel).",
+                f"Введите путь к {software_name} (или 0 / Enter / b для отмены)."))
         print_path_examples()
-        raw = _read_path_input(f"\n  {software_name} Path > ")
+        raw = _read_path_input(f"\n  {software_name} {tr('Path', 'Путь')} > ")
         if not raw or raw.lower() in _BACK_CHOICES:
-            cancel("Cancelled.")
+            cancel(tr("Cancelled.", "Отменено."))
             return None
         if raw:
             if target_type == "ide" or software_name == "Antigravity IDE":
@@ -286,169 +297,183 @@ def offer_download_and_block(software_name="Antigravity", target_type=None):
                 if new_path and os.path.isdir(new_path):
                     new_path = find_main_js(new_path)
                 if new_path and os.path.isfile(new_path) and new_path.endswith("main.js"):
-                    ok(f"{software_name} path updated!")
+                    ok(tr(f"{software_name} path updated!", f"Путь к {software_name} обновлён!"))
                     return new_path
                 else:
-                    err(f"Could not resolve a valid {software_name} target (main.js not found).")
+                    err(tr(f"Could not resolve a valid {software_name} target (main.js not found).",
+                           f"Не удалось найти корректную цель {software_name} (main.js не найден)."))
             elif target_type == "manager" or software_name == "Antigravity 2.0":
                 new_path = resolve_manager_path(raw)
                 if new_path and os.path.isfile(new_path):
-                    ok(f"{software_name} path updated!")
+                    ok(tr(f"{software_name} path updated!", f"Путь к {software_name} обновлён!"))
                     return new_path
                 else:
-                    err(f"Could not resolve a valid {software_name} target (language_server not found).")
+                    err(tr(f"Could not resolve a valid {software_name} target (language_server not found).",
+                           f"Не удалось найти корректную цель {software_name} (language_server не найден)."))
             elif target_type == "agy" or software_name == "Antigravity CLI":
                 new_path = resolve_agy_path(raw)
                 if new_path and os.path.isfile(new_path):
-                    ok(f"{software_name} path updated!")
+                    ok(tr(f"{software_name} path updated!", f"Путь к {software_name} обновлён!"))
                     return new_path
                 else:
-                    err(f"Could not resolve a valid {software_name} target.")
+                    err(tr(f"Could not resolve a valid {software_name} target.",
+                           f"Не удалось найти корректную цель {software_name}."))
             else:
                 p = resolve_target_path(raw) or resolve_manager_path(raw) or resolve_agy_path(raw)
                 if p and os.path.exists(p):
-                    ok("Path updated!")
+                    ok(tr("Path updated!", "Путь обновлён!"))
                     return p
                 else:
-                    err("Invalid path provided.")
+                    err(tr("Invalid path provided.", "Указан некорректный путь."))
         return None
     else:
-        cancel("Cancelled.")
+        cancel(tr("Cancelled.", "Отменено."))
         return None
 
 
 def _kv(label, value_text, value_color):
     """Отформатированная пара ключ/значение с выравниванием меток."""
-    print(f"      {label:<9}{color(value_text, value_color)}")
+    print(f"      {label:<10}{color(value_text, value_color)}")
 
 
 def print_target_info(main_js_path, manager_path="", agy_path="", vscode_path="", vscode_agy_path="", show_search_line=False):
     if show_search_line:
-        info("Searching for installations...")
+        info(tr("Searching for installations...", "Поиск установленных компонентов..."))
+
+    _not_found = tr("not found", "не найден")
+    _not_found_cap = tr("Not found", "Не найден")
+    _found = tr("found", "найден")
+    _patched_yes = tr("already patched", "пропатчен")
+    _patched_no = tr("not patched", "не пропатчен")
+    _unreadable = tr("unreadable", "не читается")
+    _not_detected = tr("not detected", "не определена")
 
     # 1. Antigravity IDE Info
     print_menu_section("ANTIGRAVITY IDE")
-    _kv("Target:", main_js_path if main_js_path else "Not found", COLOR_CYAN)
+    _kv(tr("Target:", "Цель:"), main_js_path if main_js_path else _not_found_cap, COLOR_CYAN)
     if main_js_path and os.path.exists(main_js_path):
         try:
             with open(main_js_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            _kv("Status:", "found", COLOR_GREEN)
+            _kv(tr("Status:", "Статус:"), _found, COLOR_GREEN)
             patched = is_already_patched(content)
-            _kv("Patch:", "already patched" if patched else "not patched",
+            _kv(tr("Patch:", "Патч:"), _patched_yes if patched else _patched_no,
                 COLOR_YELLOW if patched else COLOR_GREEN)
         except Exception:
-            _kv("Status:", "unreadable", COLOR_RED)
-            _kv("Patch:", "unreadable", COLOR_RED)
+            _kv(tr("Status:", "Статус:"), _unreadable, COLOR_RED)
+            _kv(tr("Patch:", "Патч:"), _unreadable, COLOR_RED)
 
         ver_str, _ = get_ag_version(main_js_path)
-        _kv("Version:", ver_str if ver_str else "not detected",
+        _kv(tr("Version:", "Версия:"), ver_str if ver_str else _not_detected,
             COLOR_GREEN if ver_str else COLOR_YELLOW)
 
         size = file_size(main_js_path)
-        _kv("Size:", format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
+        _kv(tr("Size:", "Размер:"), format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
     else:
-        _kv("Status:", "not found", COLOR_RED)
+        _kv(tr("Status:", "Статус:"), _not_found, COLOR_RED)
 
     print()
 
     # 2. Antigravity 2.0 Info
     print_menu_section("ANTIGRAVITY 2.0")
-    _kv("Target:", manager_path if manager_path else "Not found", COLOR_CYAN)
+    _kv(tr("Target:", "Цель:"), manager_path if manager_path else _not_found_cap, COLOR_CYAN)
     if manager_path and os.path.isfile(manager_path):
-        _kv("Status:", "found", COLOR_GREEN)
+        _kv(tr("Status:", "Статус:"), _found, COLOR_GREEN)
         patched = is_mgr_patched(manager_path)
-        _kv("Patch:", "already patched" if patched else "not patched",
+        _kv(tr("Patch:", "Патч:"), _patched_yes if patched else _patched_no,
             COLOR_YELLOW if patched else COLOR_GREEN)
         
         ver_str = get_antigravity_version(manager_path)
-        _kv("Version:", ver_str if ver_str else "not detected",
+        _kv(tr("Version:", "Версия:"), ver_str if ver_str else _not_detected,
             COLOR_GREEN if ver_str else COLOR_YELLOW)
 
         size = file_size(manager_path)
-        _kv("Size:", format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
+        _kv(tr("Size:", "Размер:"), format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
     else:
-        _kv("Status:", "not found", COLOR_YELLOW)
+        _kv(tr("Status:", "Статус:"), _not_found, COLOR_YELLOW)
 
     print()
 
     # 3. Antigravity CLI Info
     print_menu_section("ANTIGRAVITY CLI")
-    _kv("Target:", agy_path if agy_path else "Not found", COLOR_CYAN)
+    _kv(tr("Target:", "Цель:"), agy_path if agy_path else _not_found_cap, COLOR_CYAN)
     if agy_path and os.path.isfile(agy_path):
-        _kv("Status:", "found", COLOR_GREEN)
+        _kv(tr("Status:", "Статус:"), _found, COLOR_GREEN)
         patched = is_agy_patched(agy_path)
-        _kv("Patch:", "already patched" if patched else "not patched",
+        _kv(tr("Patch:", "Патч:"), _patched_yes if patched else _patched_no,
             COLOR_YELLOW if patched else COLOR_GREEN)
         size = file_size(agy_path)
-        _kv("Size:", format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
+        _kv(tr("Size:", "Размер:"), format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
     else:
-        _kv("Status:", "not found", COLOR_YELLOW)
+        _kv(tr("Status:", "Статус:"), _not_found, COLOR_YELLOW)
 
     print()
 
     # 4. Antigravity VS Code Extension Info (extension.js + бинарь agy)
-    print_menu_section("ANTIGRAVITY VS CODE EXTENSION")
-    _kv("Target:", vscode_path if vscode_path else "Not found", COLOR_CYAN)
+    print_menu_section(tr("ANTIGRAVITY VS CODE EXTENSION", "РАСШИРЕНИЕ ANTIGRAVITY VS CODE"))
+    _kv(tr("Target:", "Цель:"), vscode_path if vscode_path else _not_found_cap, COLOR_CYAN)
     if vscode_path and os.path.isfile(vscode_path):
-        _kv("Status:", "found", COLOR_GREEN)
+        _kv(tr("Status:", "Статус:"), _found, COLOR_GREEN)
         try:
             with open(vscode_path, "r", encoding="utf-8") as f:
                 content = f.read()
             patched = is_vscode_patched(content)
-            _kv("Patch:", "already patched" if patched else "not patched",
+            _kv(tr("Patch:", "Патч:"), _patched_yes if patched else _patched_no,
                 COLOR_YELLOW if patched else COLOR_GREEN)
         except Exception:
-            _kv("Patch:", "unreadable", COLOR_RED)
+            _kv(tr("Patch:", "Патч:"), _unreadable, COLOR_RED)
         size = file_size(vscode_path)
-        _kv("Size:", format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
+        _kv(tr("Size:", "Размер:"), format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
     else:
-        _kv("Status:", "not found", COLOR_YELLOW)
+        _kv(tr("Status:", "Статус:"), _not_found, COLOR_YELLOW)
 
     print()
 
-    _kv("AGY Bin:", vscode_agy_path if vscode_agy_path else "Not found", COLOR_CYAN)
+    _kv(tr("AGY Bin:", "Файл AGY:"), vscode_agy_path if vscode_agy_path else _not_found_cap, COLOR_CYAN)
     if vscode_agy_path and os.path.isfile(vscode_agy_path):
-        _kv("Status:", "found", COLOR_GREEN)
+        _kv(tr("Status:", "Статус:"), _found, COLOR_GREEN)
         patched = is_agy_patched(vscode_agy_path)
-        _kv("Patch:", "already patched" if patched else "not patched",
+        _kv(tr("Patch:", "Патч:"), _patched_yes if patched else _patched_no,
             COLOR_YELLOW if patched else COLOR_GREEN)
         size = file_size(vscode_agy_path)
-        _kv("Size:", format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
+        _kv(tr("Size:", "Размер:"), format_bytes(size), COLOR_GREEN if size > 0 else COLOR_YELLOW)
     else:
-        _kv("Status:", "not found", COLOR_YELLOW)
+        _kv(tr("Status:", "Статус:"), _not_found, COLOR_YELLOW)
 
 
 def show_about():
     clear_screen()
     print_banner()
-    print_menu_section("ABOUT ANTIGRAVITY PATCHER")
+    print_menu_section(tr("ABOUT ANTIGRAVITY PATCHER", "О ПРОГРАММЕ ANTIGRAVITY PATCHER"))
     print()
     print(f"  {color('Antigravity Patcher by energystar', COLOR_BOLD, COLOR_CYAN)} v{VERSION}")
-    print("  Open-source diagnostics, network routing, and extension toolkit for Antigravity:")
-    print("  Antigravity IDE, Antigravity 2.0 (language_server), and Antigravity CLI (agy).")
-    print("  Provides selective DNS routing, quota visibility, and runtime diagnostics without VPN.")
+    print(tr("  Open-source diagnostics, network routing, and extension toolkit for Antigravity:",
+             "  Открытый набор инструментов диагностики, маршрутизации и расширений для Antigravity:"))
+    print(tr("  Antigravity IDE, Antigravity 2.0 (language_server), and Antigravity CLI (agy).",
+             "  Antigravity IDE, Antigravity 2.0 (language_server) и Antigravity CLI (agy)."))
+    print(tr("  Provides selective DNS routing, quota visibility, and runtime diagnostics without VPN.",
+             "  Выборочный DNS-роутинг, мониторинг квот, ротация аккаунтов 429 и автодиагностика без VPN."))
     print()
-    hint("Features:")
-    print(f"   • {color('Antigravity IDE config', COLOR_GREEN)} — main.js diagnostics, dialog & TLS support")
-    print(f"   • {color('Antigravity 2.0 support', COLOR_GREEN)} — language_server & Desktop UI integration")
-    print(f"   • {color('Antigravity CLI support', COLOR_GREEN)} — agy CLI environment compatibility")
-    print(f"   • {color('Auto-launch Apps', COLOR_GREEN)}     — automatically opens configured application")
-    print(f"   • {color('Auto-update Lock', COLOR_GREEN)}    — granular lock for IDE, 2.0 & VS Code")
-    print(f"   • {color('Backup & Restore', COLOR_GREEN)}     — safe, fully reversible modifications")
+    hint(tr("Features:", "Возможности:"))
+    print(f"   • {color(tr('Antigravity IDE config', 'Настройка Antigravity IDE'), COLOR_GREEN)} — {tr('main.js diagnostics, dialog & TLS support', 'main.js, диалоги, роутинг и TLS')}")
+    print(f"   • {color(tr('Antigravity 2.0 support', 'Поддержка Antigravity 2.0'), COLOR_GREEN)} — {tr('language_server & Desktop UI integration', 'language_server и встроенный Desktop UI')}")
+    print(f"   • {color(tr('Antigravity CLI support', 'Поддержка Antigravity CLI'), COLOR_GREEN)} — {tr('agy CLI environment compatibility', 'совместимость среды agy CLI')}")
+    print(f"   • {color(tr('Auto-launch Apps', 'Автозапуск приложений'), COLOR_GREEN)}     — {tr('automatically opens configured application', 'запускает готовое приложение после патча')}")
+    print(f"   • {color(tr('Auto-update Lock', 'Контроль обновлений'), COLOR_GREEN)}    — {tr('granular lock for IDE, 2.0 & VS Code', 'раздельная блокировка для IDE, 2.0 и VS Code')}")
+    print(f"   • {color(tr('Backup & Restore', 'Бэкапы и восстановление'), COLOR_GREEN)}     — {tr('safe, fully reversible modifications', 'безопасный откат всех изменений')}")
     print()
-    hint("Author & Community:")
+    hint(tr("Author & Community:", "Автор и ссылки:"))
     tg_main = link("https://t.me/energystar6", "@energystar6", COLOR_CYAN, COLOR_UNDERLINE)
     gh_link = link("https://github.com/EnergyStario/antigravity-patcher", "github.com/EnergyStario/antigravity-patcher", COLOR_CYAN, COLOR_UNDERLINE)
 
-    print(f"   • Author:   {color('energystar', COLOR_YELLOW)}")
+    print(f"   • {tr('Author:', 'Автор:')}   {color('energystar', COLOR_YELLOW)}")
     print(f"   • Telegram: {tg_main}")
     print(f"   • GitHub:   {gh_link}")
     print()
-    hint("License:")
+    hint(tr("License:", "Лицензия:"))
     print("   • GPL-3.0 License")
     print()
-    print_menu_row("0", "Back to main menu", "return to patcher", COLOR_RED)
+    print_menu_row("0", tr("Back to main menu", "Назад в главное меню"), tr("return to patcher", "Enter / 0 / b"), COLOR_RED)
 
 
 
@@ -580,11 +605,12 @@ def _target_ver_label(target_key: str, path: str, unlocked: bool) -> tuple[str, 
     if cached and cached.get("update_available") and cached.get("latest_version"):
         new_v = cached["latest_version"]
         upd_tag = " " + color(f"(-> v{new_v}!)", COLOR_CYAN)
-        hint_extra = f"v{ver} -> v{new_v} available" if ver else f"v{new_v} available"
+        avail = tr("available", "доступно")
+        hint_extra = f"v{ver} -> v{new_v} {avail}" if ver else f"v{new_v} {avail}"
     elif unlocked and ver:
-        hint_extra = f"v{ver}, auto-upd ON"
+        hint_extra = tr(f"v{ver}, auto-upd ON", f"v{ver}, автообн. ВКЛ")
     elif ver:
-        hint_extra = f"v{ver}, lock ON"
+        hint_extra = tr(f"v{ver}, lock ON", f"v{ver}, блок ВКЛ")
     return ver_tag + upd_tag, hint_extra
 
 
@@ -677,7 +703,7 @@ def _cached_target_badge(label, path, checker_fn, is_text=False, target_key="", 
             _TARGET_STATUS_CACHE[key] = patched
             _save_disk_status_cache()
         ver_suffix, _ = _target_ver_label(target_key, path, unlocked) if target_key else ("", "")
-        state_str = color("OK", COLOR_GREEN) if patched else color("NEED PATCH", COLOR_YELLOW)
+        state_str = color("OK", COLOR_GREEN) if patched else color(tr("NEED PATCH", "НУЖЕН ПАТЧ"), COLOR_YELLOW)
         return f"{label}{ver_suffix}: {state_str}"
     except Exception:
         return f"{label}: " + color("?", COLOR_RED)
@@ -707,17 +733,19 @@ def redraw_main_screen(main_js_path, manager_path="", agy_path="", vscode_path="
         parts = list(pool.map(lambda s: _cached_target_badge(*s), badge_specs))
 
     if not ide_unlocked and not mgr_unlocked:
-        lock_tag = color("LOCKED", COLOR_GREEN)
+        lock_tag = color(tr("LOCKED", "ЗАБЛОК."), COLOR_GREEN)
     elif ide_unlocked and mgr_unlocked:
-        lock_tag = color("OPEN", COLOR_YELLOW)
+        lock_tag = color(tr("OPEN", "РАЗРЕШЕНЫ"), COLOR_YELLOW)
     else:
         open_list = []
         if ide_unlocked:
             open_list.append("IDE")
         if mgr_unlocked:
             open_list.append("2.0")
-        lock_tag = color(f"OPEN ({'/'.join(open_list)})", COLOR_YELLOW)
-    print(f"  Status:  {'  |  '.join(parts)}  |  Updates: {lock_tag}")
+        open_lbl = tr("OPEN", "ОТКР.")
+        lock_tag = color(f"{open_lbl} ({'/'.join(open_list)})", COLOR_YELLOW)
+    lang_badge = color(get_lang().upper(), COLOR_CYAN, COLOR_BOLD)
+    print(f"  {tr('Status:', 'Статус:')}  {'  |  '.join(parts)}  |  {tr('Updates:', 'Обновл.:')} {lock_tag}  |  {tr('Lang:', 'Язык:')} {lang_badge}")
     print()
 
 
@@ -757,20 +785,27 @@ def do_patch_vscode_flow(vscode_path, vscode_agy_path, set_js_cb=None, set_agy_c
 
     missing = []
     if not vscode_path or not os.path.isfile(vscode_path):
-        missing.append("extension.js (VS Code extension 'google.google-antigravity')")
+        missing.append(tr("extension.js (VS Code extension 'google.google-antigravity')",
+                          "extension.js (расширение VS Code 'google.google-antigravity')"))
     if not vscode_agy_path or not os.path.isfile(vscode_agy_path):
-        missing.append(f"agy binary ({describe_gemini_binary_path()})")
+        missing.append(tr(f"agy binary ({describe_gemini_binary_path()})",
+                          f"бинарник agy ({describe_gemini_binary_path()})"))
 
     if missing:
         if silent_if_missing:
-            hint("Antigravity VS Code extension not installed — skipping")
+            hint(tr("Antigravity VS Code extension not installed — skipping",
+                    "Расширение Antigravity VS Code не найдено — пропуск"))
             return False
-        err("Antigravity VS Code Patch blocked — required files not found:")
+        err(tr("Antigravity VS Code Patch blocked — required files not found:",
+               "Патч Antigravity VS Code невозможен — не найдены обязательные файлы:"))
         for m in missing:
             err(f"  - {m}")
-        hint("Install the 'Google Antigravity' extension in VS Code first")
-        hint("(Extensions view -> search 'Antigravity' -> Install),")
-        hint("run it once — it downloads the binary to ~/.gemini/bin automatically.")
+        hint(tr("Install the 'Google Antigravity' extension in VS Code first",
+                "Сначала установите расширение 'Google Antigravity' в VS Code"))
+        hint(tr("(Extensions view -> search 'Antigravity' -> Install),",
+                "(Панель Extensions -> поиск 'Antigravity' -> Install),"))
+        hint(tr("run it once — it downloads the binary to ~/.gemini/bin automatically.",
+                "запустите его один раз — бинарник автоматически скачается в ~/.gemini/bin."))
         return False
 
     # --- 1. Патчим extension.js ---
@@ -778,7 +813,7 @@ def do_patch_vscode_flow(vscode_path, vscode_agy_path, set_js_cb=None, set_agy_c
 
     # --- 2. Патчим бинарь ~/.gemini/bin/antigravity (agy-патчем) ---
     print()
-    info(f"Found downloaded binary: {color(vscode_agy_path, COLOR_CYAN)}")
+    info(f"{tr('Found downloaded binary', 'Найден скачанный бинарник')}: {color(vscode_agy_path, COLOR_CYAN)}")
     do_patch_agy(vscode_agy_path)
     return True
 
@@ -807,7 +842,25 @@ def run_cli():
                     context_info="cli --auto-patch",
                 )
             return
-        args = [a for a in sys.argv[1:] if a not in ("--rollback", "-r")]
+        args = []
+        skip_next_arg = False
+        for a in sys.argv[1:]:
+            if skip_next_arg:
+                skip_next_arg = False
+                if a.strip().lower() in SUPPORTED_LANGS:
+                    set_lang(a.strip().lower())
+                continue
+            if a in ("--rollback", "-r"):
+                continue
+            if a == "--lang":
+                skip_next_arg = True
+                continue
+            if a.startswith("--lang="):
+                cand_lang = a.split("=", 1)[1].strip().lower()
+                if cand_lang in SUPPORTED_LANGS:
+                    set_lang(cand_lang)
+                continue
+            args.append(a)
         if args:
             arg = " ".join(args)
             # Пытаемся определить тип цели
@@ -828,14 +881,15 @@ def run_cli():
                     if agy_p and os.path.isfile(agy_p):
                         agy_path = agy_p
                     else:
-                        err(f"Provided path does not exist or invalid: {arg}")
+                        err(tr(f"Provided path does not exist or invalid: {arg}",
+                               f"Указанный путь не существует или недействителен: {arg}"))
 
     # 2. Проверяем текущую директорию (для Antigravity IDE)
     if not main_js_path and not manager_path and not agy_path:
         local = os.path.join(os.getcwd(), "main.js")
         if os.path.exists(local):
             main_js_path = local
-            info("Found main.js in current directory")
+            info(tr("Found main.js in current directory", "Найден main.js в текущей папке"))
 
     # 3. Авто-поиск в системе (быстрый, без блокирующих задержек)
     if not main_js_path and not manager_path and not agy_path:
@@ -927,7 +981,10 @@ def run_cli():
                 vscode_agy_path=vscode_agy_path,
             )
             if _st.get("needs_any"):
-                info("Автопилот: обнаружены неподготовленные компоненты — применяю исправления автоматически...")
+                info(tr(
+                    "Autopilot: unpatched components detected — applying fixes automatically...",
+                    "Автопилот: обнаружены неподготовленные компоненты — применяю исправления автоматически...",
+                ))
                 _was_open = detect_running_antigravity_apps()
                 _rep = run_auto_repatch(
                     restart_running=True,
@@ -1004,65 +1061,104 @@ def run_cli():
         _, _ide_hint_ver = _target_ver_label("ide", main_js_path, _is_target_unlocked("ide", main_js_path))
         _, _mgr_hint_ver = _target_ver_label("manager", manager_path, _is_target_unlocked("manager", main_js_path))
         _, _cli_hint_ver = _target_ver_label("cli", agy_path, _is_target_unlocked("cli", main_js_path))
-        print_menu_section("PATCH")
-        print_menu_row("1", "Apply all patches", "check updates, apply all patches & relaunch", COLOR_GREEN)
-        print_menu_row("2", "Antigravity IDE patch", f"configure IDE runtime ({_ide_hint_ver})" if _ide_hint_ver else "configure IDE runtime", COLOR_GREEN)
-        print_menu_row("3", "Antigravity 2.0 patch", f"patch language_server & UI ({_mgr_hint_ver})" if _mgr_hint_ver else "patch language_server binary & Desktop UI", COLOR_GREEN)
-        print_menu_row("4", "Antigravity CLI (agy) patch", f"configure agy CLI ({_cli_hint_ver})" if _cli_hint_ver else "configure agy CLI", COLOR_GREEN)
-        print_menu_row("5", "Antigravity VS Code Patch", "patch google.google-antigravity extension.js + agy binary", COLOR_GREEN)
+        print_menu_section(tr("PATCH", "ПАТЧИНГ"))
+        print_menu_row("1", tr("Apply all patches", "Применить все патчи"),
+                       tr("check updates, apply all patches & relaunch", "обновить, пропатчить всё и перезапустить"), COLOR_GREEN)
+        print_menu_row("2", tr("Antigravity IDE patch", "Патч Antigravity IDE"),
+                       (tr(f"configure IDE runtime ({_ide_hint_ver})", f"настроить IDE ({_ide_hint_ver})")
+                        if _ide_hint_ver else tr("configure IDE runtime", "настроить среду IDE")), COLOR_GREEN)
+        print_menu_row("3", tr("Antigravity 2.0 patch", "Патч Antigravity 2.0"),
+                       (tr(f"patch language_server & UI ({_mgr_hint_ver})", f"language_server и UI ({_mgr_hint_ver})")
+                        if _mgr_hint_ver else tr("patch language_server binary & Desktop UI", "language_server и Desktop UI")), COLOR_GREEN)
+        print_menu_row("4", tr("Antigravity CLI (agy) patch", "Патч Antigravity CLI (agy)"),
+                       (tr(f"configure agy CLI ({_cli_hint_ver})", f"настроить agy CLI ({_cli_hint_ver})")
+                        if _cli_hint_ver else tr("configure agy CLI", "настроить agy CLI")), COLOR_GREEN)
+        print_menu_row("5", tr("Antigravity VS Code Patch", "Патч Antigravity VS Code"),
+                       tr("patch google.google-antigravity extension.js + agy binary", "расширение VS Code + бинарник agy"), COLOR_GREEN)
 
-        print_menu_section("RESTORE")
-        print_menu_row("6", "Restore all from backup", "restore all available backups", COLOR_YELLOW)
-        print_menu_row("7", "Antigravity 2.0", "from backup", COLOR_YELLOW)
-        print_menu_row("8", "Antigravity CLI", "from backup", COLOR_YELLOW)
-        print_menu_row("9", "Antigravity VS Code extension", "from backup", COLOR_YELLOW)
+        print_menu_section(tr("RESTORE", "ВОССТАНОВЛЕНИЕ"))
+        print_menu_row("6", tr("Restore all from backup", "Восстановить всё из бэкапа"),
+                       tr("restore all available backups", "откат всех доступных резервных копий"), COLOR_YELLOW)
+        print_menu_row("7", "Antigravity 2.0", tr("from backup", "из бэкапа"), COLOR_YELLOW)
+        print_menu_row("8", "Antigravity CLI", tr("from backup", "из бэкапа"), COLOR_YELLOW)
+        print_menu_row("9", tr("Antigravity VS Code extension", "Расширение VS Code"),
+                       tr("from backup", "из бэкапа"), COLOR_YELLOW)
 
-        print_menu_section("EXTRAS")
+        print_menu_section(tr("EXTRAS", "ДОПОЛНИТЕЛЬНО"))
         cached_locked = _get_cached_update_locked()
-        lock_label = "Unlock all auto-updates" if cached_locked else "Lock all auto-updates"
-        lock_hint  = "unblock IDE, 2.0 & VS Code updaters" if cached_locked else "block IDE, 2.0 & VS Code updaters"
+        lock_label = (
+            tr("Unlock all auto-updates", "Разблокировать обновления")
+            if cached_locked else
+            tr("Lock all auto-updates", "Заблокировать обновления")
+        )
+        lock_hint = (
+            tr("unblock IDE, 2.0 & VS Code updaters", "разрешить обновления IDE, 2.0 и VS Code")
+            if cached_locked else
+            tr("block IDE, 2.0 & VS Code updaters", "запретить обновления IDE, 2.0 и VS Code")
+        )
         print_menu_row("10", lock_label, lock_hint, COLOR_YELLOW)
-        print_menu_row("11", "TLS certificate fix", "fix expired localhost TLS cert", COLOR_YELLOW)
-        print_menu_row("12", "Diagnostics / Auto-fix", "analyze logs & auto-fix errors", COLOR_YELLOW)
-        print_menu_row("13", "Reset data / Fix 429", "reset IDE data folder, preserve chats", COLOR_YELLOW)
+        print_menu_row("11", tr("TLS certificate fix", "Фикс TLS-сертификата"),
+                       tr("fix expired localhost TLS cert", "исправить локальный TLS-сертификат"), COLOR_YELLOW)
+        print_menu_row("12", tr("Diagnostics / Auto-fix", "Диагностика / Автолечение"),
+                       tr("analyze logs & auto-fix errors", "анализ логов и автоисправление ошибок"), COLOR_YELLOW)
+        print_menu_row("13", tr("Reset data / Fix 429", "Очистка кэша / Фикс 429"),
+                       tr("reset IDE data folder, preserve chats", "очистить кэш без потери настроек и чатов"), COLOR_YELLOW)
 
         # 14. Selective DNS routing indicator (cached in memory between menu redraws)
         from patcher.nrpt_dns import is_nrpt_supported
         nrpt = _get_cached_nrpt_status()
         hosts_act, hosts_ip = _get_cached_hosts_pinned()
         if hosts_act and nrpt.get("active"):
-            dns_status = "ACTIVE (NRPT + Hosts)"
+            dns_status = tr("ACTIVE (NRPT + Hosts)", "АКТИВНО (NRPT + Hosts)")
             dns_color = COLOR_GREEN
         elif hosts_act:
-            dns_status = f"ACTIVE (Hosts: {hosts_ip})"
+            dns_status = tr(f"ACTIVE (Hosts: {hosts_ip})", f"АКТИВНО (Hosts: {hosts_ip})")
             dns_color = COLOR_GREEN
         elif nrpt.get("active"):
-            dns_status = f"ACTIVE ({nrpt.get('server', 'Unblock DNS')})"
+            srv_lbl = nrpt.get("server", "Unblock DNS")
+            dns_status = tr(f"ACTIVE ({srv_lbl})", f"АКТИВНО ({srv_lbl})")
             dns_color = COLOR_GREEN
         elif not is_nrpt_supported():
-            dns_status = "UNSUPPORTED"
+            dns_status = tr("UNSUPPORTED", "НЕ ПОДДЕРЖ.")
             dns_color = COLOR_DIM
         else:
-            dns_status = "DISABLED"
+            dns_status = tr("DISABLED", "ВЫКЛ")
             dns_color = COLOR_YELLOW
-        print_menu_row("14", f"Selective DNS & Routing [{color(dns_status, dns_color)}]", "route 400 endpoints without VPN (NRPT/Hosts)", COLOR_YELLOW)
+        print_menu_row("14", f"{tr('Selective DNS & Routing', 'DNS и роутинг')} [{color(dns_status, dns_color)}]",
+                       tr("route 400 endpoints without VPN (NRPT/Hosts)", "доступ без VPN через NRPT / Hosts"), COLOR_YELLOW)
 
-        print_menu_section("TOOLS")
-        print_menu_row("15", "Open GitHub repository", "source & updates", COLOR_CYAN)
-        print_menu_row("16", "Select custom path", "override auto-detected target", COLOR_CYAN)
-        print_menu_row("17", "About program", "information & author links", COLOR_CYAN)
-        print_menu_row("18", "Install Antigravity Assistant", "deploy extension & export VSIX", COLOR_CYAN)
-        print_menu_row("19", "Check for cloud updates", "auto-download & apply latest release", COLOR_CYAN)
-        print_menu_row("20", "Rebuild & repair chat history", "restore missing/ordered conversations", COLOR_CYAN)
+        print_menu_section(tr("TOOLS", "ИНСТРУМЕНТЫ"))
+        print_menu_row("15", tr("Open GitHub repository", "Открыть GitHub репозиторий"),
+                       tr("source & updates", "исходный код и релизы"), COLOR_CYAN)
+        print_menu_row("16", tr("Select custom path", "Указать свой путь"),
+                       tr("override auto-detected target", "ручной выбор папки приложения"), COLOR_CYAN)
+        print_menu_row("17", tr("About program", "О программе"),
+                       tr("information & author links", "информация и ссылки автора"), COLOR_CYAN)
+        print_menu_row("18", tr("Install Antigravity Assistant", "Установить Assistant (UI)"),
+                       tr("deploy extension & export VSIX", "установка расширения и экспорт VSIX"), COLOR_CYAN)
+        print_menu_row("19", tr("Check for cloud updates", "Обновления патчера"),
+                       tr("auto-download & apply latest release", "скачать и установить новый релиз"), COLOR_CYAN)
+        print_menu_row("20", tr("Rebuild & repair chat history", "Восстановить историю чатов"),
+                       tr("restore missing/ordered conversations", "вернуть пропавшие диалоги и порядок"), COLOR_CYAN)
+        cur_lang_code = get_lang().upper()
+        lang_row_label = tr(
+            f"Language: English [{color(cur_lang_code, COLOR_GREEN)}]",
+            f"Язык: Русский [{color(cur_lang_code, COLOR_GREEN)}]",
+        )
+        lang_row_hint = tr("switch to Русский (press L)", "переключить на English (нажмите L)")
+        print_menu_row("L", lang_row_label, lang_row_hint, COLOR_CYAN)
 
         print()
-        print_menu_row("0", "Exit", "quit the patcher (0 / q / Esc)", COLOR_RED)
-        print_menu_footer("Enter — refresh  |  0 / q / Esc — exit  |  In submenus: Enter / 0 / b — back.")
+        print_menu_row("0", tr("Exit", "Выход"), tr("quit the patcher (0 / q / Esc)", "закрыть патчер (0 / q / Esc)"), COLOR_RED)
+        print_menu_footer(tr(
+            "Enter — refresh  |  L — EN/RU  |  0 / q / Esc — exit  |  Submenus: Enter / 0 / b — back.",
+            "Enter — обновить  |  L — RU/EN  |  0 / q / Esc — выход  |  Подменю: Enter / 0 / b — назад.",
+        ))
 
-        valid_choices = {str(i) for i in range(1, 21)}
+        valid_choices = {str(i) for i in range(1, 22)} | {"l", "lang", "язык"}
         choice = None
         while True:
-            raw_choice = _read_menu_input("\n  Select option > ", default_on_eof="0")
+            raw_choice = _read_menu_input(tr("\n  Select option > ", "\n  Выберите пункт > "), default_on_eof="0")
             if raw_choice in ("0", "q", "quit", "exit"):
                 return
             if raw_choice in ("", "back", "b", "назад"):
@@ -1071,10 +1167,19 @@ def run_cli():
             if raw_choice in valid_choices:
                 choice = raw_choice
                 break
-            err(f"Unknown option '{raw_choice}' — enter 1-20, Enter to refresh, or 0/q to exit.")
+            err(tr(
+                f"Unknown option '{raw_choice}' — enter 1-20, L to switch language, Enter to refresh, or 0/q to exit.",
+                f"Неизвестный пункт '{raw_choice}' — введите 1-20, L для смены языка, Enter для обновления или 0/q для выхода.",
+            ))
 
         print()
         if choice == "":
+            redraw_main_screen(main_js_path, manager_path, agy_path, vscode_path,
+                               vscode_agy_path, show_search_line=False)
+            continue
+
+        if choice in ("21", "l", "lang", "язык"):
+            toggle_lang()
             redraw_main_screen(main_js_path, manager_path, agy_path, vscode_path,
                                vscode_agy_path, show_search_line=False)
             continue
@@ -1087,7 +1192,7 @@ def run_cli():
         if choice == "1":
             handled = True
             try:
-                info("Applying all patches in sequence...")
+                info(tr("Applying all patches in sequence...", "Последовательное применение всех патчей..."))
                 print()
 
                 from patcher.utils.launcher import detect_running_antigravity_apps
@@ -1124,43 +1229,47 @@ def run_cli():
                             main_js_path = new_p
 
                 if main_js_path and os.path.isfile(main_js_path):
-                    print_menu_section("1 / 5 - Antigravity IDE patch")
+                    print_menu_section(tr("1 / 5 - Antigravity IDE patch", "1 / 5 - Патч Antigravity IDE"))
                     _, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
                     do_patch(main_js_path)
                 else:
-                    warn("IDE (main.js) not found - skipping (use TOOLS -> 16 to set path)")
+                    warn(tr("IDE (main.js) not found - skipping (use TOOLS -> 16 to set path)",
+                            "IDE (main.js) не найден - пропуск (укажите путь в пункте 16)"))
 
                 # 2/5 - Manager patch
                 if manager_path and os.path.isfile(manager_path):
-                    print_menu_section("2 / 5 - Antigravity 2.0 patch")
+                    print_menu_section(tr("2 / 5 - Antigravity 2.0 patch", "2 / 5 - Патч Antigravity 2.0"))
                     _, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
                     do_patch_manager(manager_path)
                 else:
-                    warn("Antigravity 2.0 (language_server) not found - skipping")
+                    warn(tr("Antigravity 2.0 (language_server) not found - skipping",
+                            "Antigravity 2.0 (language_server) не найден - пропуск"))
 
                 # 3/5 - CLI patch
                 if not agy_path or not os.path.isfile(agy_path):
                     agy_path = find_agy_binary() or ""
                 if agy_path and os.path.isfile(agy_path):
-                    print_menu_section("3 / 5 - Antigravity CLI (agy) patch")
+                    print_menu_section(tr("3 / 5 - Antigravity CLI (agy) patch", "3 / 5 - Патч Antigravity CLI (agy)"))
                     _, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
                     do_patch_agy(agy_path)
                 else:
-                    warn("Antigravity CLI (agy) not found - skipping")
+                    warn(tr("Antigravity CLI (agy) not found - skipping",
+                            "Antigravity CLI (agy) не найден - пропуск"))
 
                 # 4/5 - VS Code - same flow as choice "5"
-                print_menu_section("4 / 5 - Antigravity VS Code patch")
+                print_menu_section(tr("4 / 5 - Antigravity VS Code patch", "4 / 5 - Патч Antigravity VS Code"))
                 do_patch_vscode_flow(vscode_path, vscode_agy_path,
                                      set_js_cb=None, set_agy_cb=None,
                                      silent_if_missing=True)
                 print()
 
                 # 5/5 - Antigravity Assistant Extension
-                print_menu_section("5 / 5 - Antigravity Assistant Extension")
+                print_menu_section(tr("5 / 5 - Antigravity Assistant Extension", "5 / 5 - Расширение Antigravity Assistant"))
                 from patcher.extension_installer import deploy_assistant_extension
                 deploy_assistant_extension(export_vsix=False)
                 print()
-                ok("All available patches and extension applied.")
+                ok(tr("All available patches and extension applied.",
+                      "Все доступные патчи и расширение успешно применены."))
 
                 _run_env_heal(
                     target="all",
@@ -1180,10 +1289,12 @@ def run_cli():
                     if launch_application("manager", manager_path):
                         launched_any = True
                 if not launched_any:
-                    hint("You can now start Antigravity normally.")
+                    hint(tr("You can now start Antigravity normally.",
+                            "Теперь можно запускать Antigravity в обычном режиме."))
             except Exception as exc:
                 import traceback
-                err(f"Unexpected error while applying all patches: {exc}")
+                err(tr(f"Unexpected error while applying all patches: {exc}",
+                       f"Ошибка при применении всех патчей: {exc}"))
                 copy_sanitized_bug_report_to_clipboard(
                     traceback.format_exc(),
                     context_info="choice=1 Apply all patches",
@@ -1214,7 +1325,8 @@ def run_cli():
                         handled = False
             except Exception as exc:
                 import traceback
-                err(f"Unexpected error patching Antigravity IDE: {exc}")
+                err(tr(f"Unexpected error patching Antigravity IDE: {exc}",
+                       f"Ошибка при патче Antigravity IDE: {exc}"))
                 copy_sanitized_bug_report_to_clipboard(
                     traceback.format_exc(),
                     context_info="choice=2 Antigravity IDE patch",
@@ -1244,7 +1356,8 @@ def run_cli():
                         handled = False
             except Exception as exc:
                 import traceback
-                err(f"Unexpected error patching Antigravity 2.0: {exc}")
+                err(tr(f"Unexpected error patching Antigravity 2.0: {exc}",
+                       f"Ошибка при патче Antigravity 2.0: {exc}"))
                 copy_sanitized_bug_report_to_clipboard(
                     traceback.format_exc(),
                     context_info="choice=3 Antigravity 2.0 patch",
@@ -1266,7 +1379,8 @@ def run_cli():
                         handled = False
             except Exception as exc:
                 import traceback
-                err(f"Unexpected error patching Antigravity CLI: {exc}")
+                err(tr(f"Unexpected error patching Antigravity CLI: {exc}",
+                       f"Ошибка при патче Antigravity CLI: {exc}"))
                 copy_sanitized_bug_report_to_clipboard(
                     traceback.format_exc(),
                     context_info="choice=4 Antigravity CLI patch",
@@ -1281,20 +1395,23 @@ def run_cli():
                     launch_application("vscode")
             except Exception as exc:
                 import traceback
-                err(f"Unexpected error patching VS Code extension: {exc}")
+                err(tr(f"Unexpected error patching VS Code extension: {exc}",
+                       f"Ошибка при патче расширения VS Code: {exc}"))
                 copy_sanitized_bug_report_to_clipboard(
                     traceback.format_exc(),
                     context_info="choice=5 Antigravity VS Code patch",
                 )
         elif choice == "6":
             handled = True
-            print_menu_section("RESTORE ALL TARGETS FROM BACKUP")
+            print_menu_section(tr("RESTORE ALL TARGETS FROM BACKUP", "ВОССТАНОВЛЕНИЕ ВСЕХ ЦЕЛЕЙ ИЗ БЭКАПА"))
             print()
-            hint("This will restore ALL applications from their original backups:")
+            hint(tr("This will restore ALL applications from their original backups:",
+                    "Будут восстановлены ВСЕ приложения из исходных резервных копий:"))
             hint("  • Antigravity IDE (main.js)")
             hint("  • Antigravity 2.0 (language_server)")
             hint("  • Antigravity CLI (agy)")
-            hint("  • Antigravity VS Code extension (extension.js + agy)")
+            hint(tr("  • Antigravity VS Code extension (extension.js + agy)",
+                    "  • Расширение Antigravity VS Code (extension.js + agy)"))
             print()
 
             # Авто-поиск путей перед восстановлением
@@ -1315,54 +1432,62 @@ def run_cli():
             if not vscode_agy_path or not os.path.isfile(vscode_agy_path):
                 vscode_agy_path = find_gemini_antigravity_binary() or ""
 
-            info("Restoring all targets in sequence...")
+            info(tr("Restoring all targets in sequence...", "Последовательное восстановление из бэкапов..."))
             print()
 
             # 1/4 - IDE restore
-            print_menu_section("1 / 4 - Antigravity IDE restore")
+            print_menu_section(tr("1 / 4 - Antigravity IDE restore", "1 / 4 - Откат Antigravity IDE"))
             if main_js_path and os.path.isfile(main_js_path):
                 do_restore(main_js_path, show_search_line=False, force=True)
             else:
-                warn("Antigravity IDE (main.js) not found - skipping (use TOOLS -> 16 to set path)")
+                warn(tr("Antigravity IDE (main.js) not found - skipping (use TOOLS -> 16 to set path)",
+                        "Antigravity IDE (main.js) не найден - пропуск (укажите путь в пункте 16)"))
 
             # 2/4 - Manager restore
-            print_menu_section("2 / 4 - Antigravity 2.0 restore")
+            print_menu_section(tr("2 / 4 - Antigravity 2.0 restore", "2 / 4 - Откат Antigravity 2.0"))
             if manager_path and os.path.isfile(manager_path):
                 do_restore_manager(manager_path, force=True)
             else:
-                warn("Antigravity 2.0 (language_server) not found - skipping")
+                warn(tr("Antigravity 2.0 (language_server) not found - skipping",
+                        "Antigravity 2.0 (language_server) не найден - пропуск"))
 
             # 3/4 - CLI restore
-            print_menu_section("3 / 4 - Antigravity CLI restore")
+            print_menu_section(tr("3 / 4 - Antigravity CLI restore", "3 / 4 - Откат Antigravity CLI"))
             cli_target = agy_path or vscode_agy_path
             if cli_target and os.path.isfile(cli_target):
                 do_restore_agy(cli_target, force=True)
             else:
-                warn("Antigravity CLI (agy) not found - skipping")
+                warn(tr("Antigravity CLI (agy) not found - skipping",
+                        "Antigravity CLI (agy) не найден - пропуск"))
 
             # 4/4 - VS Code restore
-            print_menu_section("4 / 4 - Antigravity VS Code restore")
+            print_menu_section(tr("4 / 4 - Antigravity VS Code restore", "4 / 4 - Откат Antigravity VS Code"))
             if vscode_path and os.path.isfile(vscode_path):
                 do_restore_vscode(vscode_path, force=True)
             else:
-                warn("Antigravity VS Code extension not found - skipping")
+                warn(tr("Antigravity VS Code extension not found - skipping",
+                        "Расширение Antigravity VS Code не найдено - пропуск"))
             print()
-            ok("All available targets restored from backup.")
+            ok(tr("All available targets restored from backup.",
+                  "Все доступные цели восстановлены из резервных копий."))
         elif choice == "7":
             if manager_path:
                 do_restore_manager(manager_path, force=True)
             else:
-                err("Antigravity 2.0 (language_server) path is not set. Please select custom path (Option 16) first.")
+                err(tr("Antigravity 2.0 (language_server) path is not set. Please select custom path (Option 16) first.",
+                       "Путь к Antigravity 2.0 не задан. Сначала выберите путь (пункт 16)."))
         elif choice == "8":
             if agy_path:
                 do_restore_agy(agy_path, force=True)
             else:
-                err("Antigravity CLI path is not set. Please select custom path (Option 16) first.")
+                err(tr("Antigravity CLI path is not set. Please select custom path (Option 16) first.",
+                       "Путь к Antigravity CLI не задан. Сначала выберите путь (пункт 16)."))
         elif choice == "9":
             if vscode_path:
                 do_restore_vscode(vscode_path, force=True)
             else:
-                err("Antigravity VS Code extension path is not set. Please select custom path (Option 16) first.")
+                err(tr("Antigravity VS Code extension path is not set. Please select custom path (Option 16) first.",
+                       "Путь к расширению VS Code не задан. Сначала выберите путь (пункт 16)."))
         elif choice == "10":
             if _HAVE_UPDATER_LOCK:
                 import pathlib as _pathlib
@@ -1378,47 +1503,68 @@ def run_cli():
                 while True:
                     clear_screen()
                     print_banner()
-                    print_menu_section("AUTO-UPDATE MANAGEMENT")
+                    print_menu_section(tr("AUTO-UPDATE MANAGEMENT", "УПРАВЛЕНИЕ АВТООБНОВЛЕНИЯМИ"))
                     print()
                     ide_is_locked = is_ide_locked(_ide_root_dir or None)
                     mgr_is_locked = is_manager_locked()
                     vsc_is_locked = is_vscode_locked()
                     all_is_locked = is_update_locked()
 
-                    ide_st = color("[LOCKED]", COLOR_RED) if ide_is_locked else color("[ENABLED]", COLOR_GREEN)
-                    mgr_st = color("[LOCKED]", COLOR_RED) if mgr_is_locked else color("[ENABLED]", COLOR_GREEN)
-                    vsc_st = color("[LOCKED]", COLOR_RED) if vsc_is_locked else color("[ENABLED]", COLOR_GREEN)
+                    _lbl_locked = tr("[LOCKED]", "[ЗАБЛОК.]")
+                    _lbl_enabled = tr("[ENABLED]", "[ВКЛЮЧЕНО]")
+                    ide_st = color(_lbl_locked, COLOR_RED) if ide_is_locked else color(_lbl_enabled, COLOR_GREEN)
+                    mgr_st = color(_lbl_locked, COLOR_RED) if mgr_is_locked else color(_lbl_enabled, COLOR_GREEN)
+                    vsc_st = color(_lbl_locked, COLOR_RED) if vsc_is_locked else color(_lbl_enabled, COLOR_GREEN)
 
                     ide_ver_txt, ide_upd_hint = _target_ver_label("ide", main_js_path, not ide_is_locked)
                     mgr_ver_txt, mgr_upd_hint = _target_ver_label("manager", manager_path, not mgr_is_locked)
 
-                    print("  Current Status:")
+                    print(tr("  Current Status:", "  Текущий статус:"))
                     print(f"    • Antigravity IDE{ide_ver_txt or ''}:   {ide_st}")
                     print(f"    • Antigravity 2.0{mgr_ver_txt or ''}:   {mgr_st}")
                     print(f"    • Antigravity VS Code:        {vsc_st}")
                     print()
 
-                    all_action = "Unlock all auto-updates" if all_is_locked else "Lock all auto-updates"
-                    all_hint = "unblock & check updates now (IDE, 2.0 & VS Code)" if all_is_locked else "block IDE, 2.0 & VS Code"
+                    all_action = (
+                        tr("Unlock all auto-updates", "Разблокировать все обновления")
+                        if all_is_locked else
+                        tr("Lock all auto-updates", "Заблокировать все обновления")
+                    )
+                    all_hint = (
+                        tr("unblock & check updates now (IDE, 2.0 & VS Code)", "разрешить и сразу проверить обновления")
+                        if all_is_locked else
+                        tr("block IDE, 2.0 & VS Code", "запретить обновления IDE, 2.0 и VS Code")
+                    )
+                    _tgl = tr("toggle lock", "перекл. блок.")
                     print_menu_row("1", all_action, all_hint, COLOR_YELLOW)
-                    print_menu_row("2", "Antigravity IDE updates", f"toggle lock ({ide_upd_hint or ide_st})", COLOR_GREEN)
-                    print_menu_row("3", "Antigravity 2.0 updates", f"toggle lock ({mgr_upd_hint or mgr_st})", COLOR_GREEN)
-                    print_menu_row("4", "Antigravity VS Code updates", f"toggle lock (currently {vsc_st})", COLOR_GREEN)
-                    print_menu_row("5", "Check & install available updates now", "download, close app, update, re-patch & relaunch", COLOR_CYAN)
+                    print_menu_row("2", tr("Antigravity IDE updates", "Обновления Antigravity IDE"),
+                                   f"{_tgl} ({ide_upd_hint or ide_st})", COLOR_GREEN)
+                    print_menu_row("3", tr("Antigravity 2.0 updates", "Обновления Antigravity 2.0"),
+                                   f"{_tgl} ({mgr_upd_hint or mgr_st})", COLOR_GREEN)
+                    print_menu_row("4", tr("Antigravity VS Code updates", "Обновления VS Code"),
+                                   tr(f"toggle lock (currently {vsc_st})", f"{_tgl} (сейчас {vsc_st})"), COLOR_GREEN)
+                    print_menu_row("5", tr("Check & install available updates now", "Проверить и установить обновления сейчас"),
+                                   tr("download, close app, update, re-patch & relaunch", "скачать, закрыть, обновить и заново пропатчить"), COLOR_CYAN)
                     print()
-                    print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
-                    print_menu_footer("0 / Enter / b — Back  |  [5] forces immediate update check & install.")
+                    print_menu_row("0", tr("Back to main menu", "Назад в главное меню"), "Enter / 0 / b", COLOR_RED)
+                    print_menu_footer(tr(
+                        "0 / Enter / b — Back  |  [5] forces immediate update check & install.",
+                        "0 / Enter / b — Назад  |  [5] принудительно проверяет и ставит обновления.",
+                    ))
 
                     sub_choice = None
                     while True:
-                        raw_sub = _read_menu_input("\n  Select option > ")
+                        raw_sub = _read_menu_input(tr("\n  Select option > ", "\n  Выберите пункт > "))
                         if raw_sub in _BACK_CHOICES:
                             sub_choice = "0"
                             break
                         if raw_sub in ("1", "2", "3", "4", "5"):
                             sub_choice = raw_sub
                             break
-                        err(f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.")
+                        err(tr(
+                            f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.",
+                            f"Неизвестный пункт '{raw_sub}' — введите 1-5 или Enter / 0 / b для возврата.",
+                        ))
                     if sub_choice == "0":
                         handled = False
                         break
@@ -1443,8 +1589,10 @@ def run_cli():
                                 did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("cli", agy_path, launch_after=False)
                         if not did_any_upd:
-                            info("No newer IDE / 2.0 / CLI updates found right now.")
-                        pause("  Press Enter (or any key) to continue...")
+                            info(tr("No newer IDE / 2.0 / CLI updates found right now.",
+                                    "Новых обновлений IDE / 2.0 / CLI сейчас нет."))
+                        pause(tr("  Press Enter (or any key) to continue...",
+                                 "  Нажмите Enter (или любую клавишу), чтобы продолжить..."))
                     elif sub_choice == "1":
                         print()
                         was_ide_locked = ide_is_locked
@@ -1461,7 +1609,8 @@ def run_cli():
                             did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
                             if did_m:
                                 _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
-                        pause("  Press Enter (or any key) to continue...")
+                        pause(tr("  Press Enter (or any key) to continue...",
+                                 "  Нажмите Enter (или любую клавишу), чтобы продолжить..."))
                     elif sub_choice == "2":
                         print()
                         was_ide_locked = ide_is_locked
@@ -1472,7 +1621,8 @@ def run_cli():
                             did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
                             if did_i:
                                 _apply_patch_deploy_and_launch_for_target("ide", main_js_path, launch_after=True)
-                        pause("  Press Enter (or any key) to continue...")
+                        pause(tr("  Press Enter (or any key) to continue...",
+                                 "  Нажмите Enter (или любую клавишу), чтобы продолжить..."))
                     elif sub_choice == "3":
                         print()
                         was_mgr_locked = mgr_is_locked
@@ -1483,12 +1633,14 @@ def run_cli():
                             did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
                             if did_m:
                                 _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
-                        pause("  Press Enter (or any key) to continue...")
+                        pause(tr("  Press Enter (or any key) to continue...",
+                                 "  Нажмите Enter (или любую клавишу), чтобы продолжить..."))
                     elif sub_choice == "4":
                         print()
                         toggle_vscode_updates()
                         invalidate_menu_status_cache("update_locked")
-                        pause("  Press Enter (or any key) to continue...")
+                        pause(tr("  Press Enter (or any key) to continue...",
+                                 "  Нажмите Enter (или любую клавишу), чтобы продолжить..."))
                 try:
                     from patcher.auto_repatch import sync_auto_repatch_state
                     sync_auto_repatch_state(main_js_path, manager_path, agy_path)
@@ -1501,9 +1653,10 @@ def run_cli():
                 if main_js_path and os.path.isfile(main_js_path):
                     do_tls_fix_inject(main_js_path)
                 else:
-                    err("Antigravity IDE (main.js) not found. Set path first (Option 16).")
+                    err(tr("Antigravity IDE (main.js) not found. Set path first (Option 16).",
+                           "Antigravity IDE (main.js) не найден. Сначала укажите путь (пункт 16)."))
             else:
-                err("tls_fix module not available.")
+                err(tr("tls_fix module not available.", "Модуль tls_fix недоступен."))
         elif choice == "12":
             if _HAVE_DIAGNOSTICS:
                 print_target_info(main_js_path, manager_path, agy_path, vscode_path=vscode_path,
@@ -1513,7 +1666,7 @@ def run_cli():
                                vscode_path=vscode_path, vscode_agy_path=vscode_agy_path)
                 invalidate_menu_status_cache()
             else:
-                err("diagnostics module not available.")
+                err(tr("diagnostics module not available.", "Модуль diagnostics недоступен."))
         elif choice == "13":
             if _HAVE_DATA_RESET:
                 if do_data_reset() is False:
@@ -1521,7 +1674,7 @@ def run_cli():
                 else:
                     invalidate_menu_status_cache("update_locked")
             else:
-                err("data_reset module not available.")
+                err(tr("data_reset module not available.", "Модуль data_reset недоступен."))
         elif choice == "14":
             from patcher.nrpt_dns import (
                 enable_nrpt_rule, disable_nrpt_rule,
@@ -1531,49 +1684,66 @@ def run_cli():
             from patcher.hosts_pin import (
                 enable_hosts_pinning, disable_hosts_pinning
             )
-            print_menu_section("SELECTIVE DNS & ROUTING (NO VPN REQUIRED)")
+            print_menu_section(tr("SELECTIVE DNS & ROUTING (NO VPN REQUIRED)",
+                                  "ВЫБОРОЧНЫЙ DNS И РОУТИНГ (БЕЗ VPN)"))
             nrpt = _get_cached_nrpt_status()
             cfg = get_dns_config()
             is_active = bool(nrpt.get("active"))
             current_server = nrpt.get("server", "") or cfg.get("server_ip", "")
-            status_str = f"ACTIVE ({current_server})" if is_active else "DISABLED"
+            status_str = (
+                tr(f"ACTIVE ({current_server})", f"АКТИВНО ({current_server})")
+                if is_active else tr("DISABLED", "ВЫКЛ")
+            )
 
             hosts_active, hosts_ip = _get_cached_hosts_pinned()
-            hosts_status_str = f"ACTIVE ({hosts_ip})" if hosts_active else "DISABLED"
+            hosts_status_str = (
+                tr(f"ACTIVE ({hosts_ip})", f"АКТИВНО ({hosts_ip})")
+                if hosts_active else tr("DISABLED", "ВЫКЛ")
+            )
 
             print()
-            info(f"NRPT DNS Status:     {color(status_str, COLOR_GREEN if is_active else COLOR_YELLOW)}")
-            info(f"Hosts-Pinning (VPN): {color(hosts_status_str, COLOR_GREEN if hosts_active else COLOR_YELLOW)}")
+            info(f"{tr('NRPT DNS Status:', 'Статус NRPT DNS:')}     {color(status_str, COLOR_GREEN if is_active else COLOR_YELLOW)}")
+            info(f"{tr('Hosts-Pinning (VPN):', 'Hosts-Pinning (VPN):')} {color(hosts_status_str, COLOR_GREEN if hosts_active else COLOR_YELLOW)}")
             print()
-            hint("Routes 'User location is not supported' endpoints for cloudcode-pa & daily:")
-            hint("  • [1] NRPT DNS: routes Google Cloud queries via selective Windows policy table (no VPN).")
-            hint("  • [4] Direct Hosts-Pinning: pins verified SNI proxy (100% works WITH and WITHOUT VPN).")
+            hint(tr("Routes 'User location is not supported' endpoints for cloudcode-pa & daily:",
+                    "Маршрутизирует запросы cloudcode-pa и daily при ошибке региона:"))
+            hint(tr("  • [1] NRPT DNS: routes Google Cloud queries via selective Windows policy table (no VPN).",
+                    "  • [1] NRPT DNS: выборочная маршрутизация Google Cloud в Windows (без VPN)."))
+            hint(tr("  • [4] Direct Hosts-Pinning: pins verified SNI proxy (100% works WITH and WITHOUT VPN).",
+                    "  • [4] Прямой Hosts-Pinning: закрепляет проверенный SNI-узел (работает и С VPN, и БЕЗ него)."))
             print()
             if is_active:
-                print_menu_row("1", "Disable NRPT DNS Routing (Restore standard)", f"currently active via {current_server} — click to turn off", COLOR_RED)
-                print_menu_row("2", "Connect Private Ultra DNS / Change Server", "switch or update private DNS server", COLOR_CYAN)
+                print_menu_row("1", tr("Disable NRPT DNS Routing (Restore standard)", "Отключить NRPT DNS (вернуть стандартный)"),
+                               tr(f"currently active via {current_server} — click to turn off", f"сейчас активен {current_server}"), COLOR_RED)
+                print_menu_row("2", tr("Connect Private Ultra DNS / Change Server", "Подключить приватный DNS / сменить сервер"),
+                               tr("switch or update private DNS server", "указать свой приватный DNS IP"), COLOR_CYAN)
             else:
                 target_ip = get_preferred_dns_ip(cfg)
-                mode_label = "Private DNS" if cfg.get("mode") == "private" else "Geohide Public DNS"
-                print_menu_row("1", f"Enable NRPT DNS Routing ({mode_label})", f"use resolver ({target_ip})", COLOR_GREEN)
-                print_menu_row("2", "Connect Private Ultra DNS / Premium Server", "enter your private DNS IP or server", COLOR_CYAN)
+                mode_label = tr("Private DNS", "Приватный DNS") if cfg.get("mode") == "private" else tr("Public Unblock DNS", "Публичный DNS")
+                print_menu_row("1", tr(f"Enable NRPT DNS Routing ({mode_label})", f"Включить NRPT DNS ({mode_label})"),
+                               tr(f"use resolver ({target_ip})", f"сервер ({target_ip})"), COLOR_GREEN)
+                print_menu_row("2", tr("Connect Private Ultra DNS / Premium Server", "Подключить приватный DNS / сервер"),
+                               tr("enter your private DNS IP or server", "ввести IP/адрес приватного DNS"), COLOR_CYAN)
 
             if hosts_active:
-                print_menu_row("4", "Disable Direct Hosts-Pinning", f"remove proxy mapping ({hosts_ip}) from hosts", COLOR_RED)
+                print_menu_row("4", tr("Disable Direct Hosts-Pinning", "Отключить прямой Hosts-Pinning"),
+                               tr(f"remove proxy mapping ({hosts_ip}) from hosts", f"убрать узел ({hosts_ip}) из hosts"), COLOR_RED)
             else:
-                print_menu_row("4", "Enable Direct Hosts-Pinning (VPN-Proof)", "pin verified SNI proxy to etc/hosts (recommended with VPN)", COLOR_GREEN)
+                print_menu_row("4", tr("Enable Direct Hosts-Pinning (VPN-Proof)", "Включить Hosts-Pinning (для VPN и без)"),
+                               tr("pin verified SNI proxy to etc/hosts (recommended with VPN)", "закрепить проверенный SNI-IP в etc/hosts"), COLOR_GREEN)
 
-            print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_YELLOW)
-            print_menu_footer("0 / Enter / b — Back to main menu.")
+            print_menu_row("0", tr("Back to main menu", "Назад в главное меню"), "Enter / 0 / b", COLOR_YELLOW)
+            print_menu_footer(tr("0 / Enter / b — Back to main menu.", "0 / Enter / b — Назад в главное меню."))
             print()
-            sub = _read_menu_input("  Select option > ")
+            sub = _read_menu_input(tr("  Select option > ", "  Выберите пункт > "))
             if sub in _BACK_CHOICES:
                 handled = False
             elif sub == "3" or (sub == "1" and is_active):
                 ok_flag, msg = disable_nrpt_rule()
                 invalidate_menu_status_cache("nrpt_status")
                 if ok_flag:
-                    ok("NRPT DNS routing disabled. Standard DNS restored.")
+                    ok(tr("NRPT DNS routing disabled. Standard DNS restored.",
+                          "NRPT DNS отключён. Восстановлен стандартный DNS."))
                 else:
                     err(msg)
                 handled = True
@@ -1594,16 +1764,17 @@ def run_cli():
                 handled = True
             elif sub == "2":
                 print()
-                hint("Enter your dedicated DNS IP or server hostname (or 0 / Enter / b to cancel):")
-                custom_ip = _read_path_input("  Private DNS IP / Host > ")
+                hint(tr("Enter your dedicated DNS IP or server hostname (or 0 / Enter / b to cancel):",
+                        "Введите IP или адрес выделенного DNS-сервера (или 0 / Enter / b для отмены):"))
+                custom_ip = _read_path_input(tr("  Private DNS IP / Host > ", "  Приватный DNS IP / Хост > "))
                 if not custom_ip or custom_ip.lower() in _BACK_CHOICES:
-                    cancel("Cancelled.")
+                    cancel(tr("Cancelled.", "Отменено."))
                     handled = False
                 else:
                     ok_flag, msg = enable_nrpt_rule(custom_ip, mode="private")
                     invalidate_menu_status_cache("nrpt_status")
                     if ok_flag:
-                        ok(f"Premium Private DNS activated: {msg}")
+                        ok(tr(f"Private DNS activated: {msg}", f"Приватный DNS активирован: {msg}"))
                     else:
                         err(msg)
                     handled = True
@@ -1624,46 +1795,60 @@ def run_cli():
                     err(msg)
                 handled = True
             else:
-                err("Invalid choice")
+                err(tr("Invalid choice", "Неверный выбор"))
                 handled = True
         elif choice == "15":
             webbrowser.open(GITHUB_URL)
-            ok(f"Opening GitHub repository in browser: {color(GITHUB_URL, COLOR_CYAN)}")
+            ok(f"{tr('Opening GitHub repository in browser', 'Открываю репозиторий GitHub')}: {color(GITHUB_URL, COLOR_CYAN)}")
         elif choice == "16":
             while True:
                 redraw_main_screen(main_js_path, manager_path, agy_path, vscode_path,
                                    vscode_agy_path, show_search_line=False)
-                print_menu_section("SELECT CUSTOM PATH")
-                print_menu_row("1", "Antigravity IDE path", "folder or main.js", COLOR_GREEN)
-                print_menu_row("2", "Antigravity 2.0 path", "folder or language_server binary", COLOR_GREEN)
-                print_menu_row("3", "Antigravity CLI path", "agy.exe or folder", COLOR_GREEN)
-                print_menu_row("4", "VS Code extension path (JS)", "extension.js or extensions folder", COLOR_GREEN)
-                print_menu_row("5", "VS Code binary path (agy)", "agy/antigravity binary in ~/.gemini/bin", COLOR_GREEN)
+                print_menu_section(tr("SELECT CUSTOM PATH", "РУЧНОЙ ВЫБОР ПУТИ"))
+                print_menu_row("1", tr("Antigravity IDE path", "Путь к Antigravity IDE"),
+                               tr("folder or main.js", "папка или main.js"), COLOR_GREEN)
+                print_menu_row("2", tr("Antigravity 2.0 path", "Путь к Antigravity 2.0"),
+                               tr("folder or language_server binary", "папка или бинарник language_server"), COLOR_GREEN)
+                print_menu_row("3", tr("Antigravity CLI path", "Путь к Antigravity CLI"),
+                               tr("agy.exe or folder", "agy.exe или папка"), COLOR_GREEN)
+                print_menu_row("4", tr("VS Code extension path (JS)", "Путь к расширению VS Code (JS)"),
+                               tr("extension.js or extensions folder", "extension.js или папка extensions"), COLOR_GREEN)
+                print_menu_row("5", tr("VS Code binary path (agy)", "Путь к бинарнику VS Code (agy)"),
+                               tr("agy/antigravity binary in ~/.gemini/bin", "файл agy/antigravity в ~/.gemini/bin"), COLOR_GREEN)
                 print()
-                print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
-                print_menu_footer("0 / Enter / b — Back  |  Leaves auto-detection results intact for other targets.")
+                print_menu_row("0", tr("Back to main menu", "Назад в главное меню"), "Enter / 0 / b", COLOR_RED)
+                print_menu_footer(tr(
+                    "0 / Enter / b — Back  |  Leaves auto-detection results intact for other targets.",
+                    "0 / Enter / b — Назад  |  Автоопределённые пути других целей не сбрасываются.",
+                ))
 
                 sub_choice = None
                 while True:
-                    raw_sub = _read_menu_input("\n  Select option > ")
+                    raw_sub = _read_menu_input(tr("\n  Select option > ", "\n  Выберите пункт > "))
                     if raw_sub in _BACK_CHOICES:
                         sub_choice = "0"
                         break
                     if raw_sub in ("1", "2", "3", "4", "5"):
                         sub_choice = raw_sub
                         break
-                    err(f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.")
+                    err(tr(
+                        f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.",
+                        f"Неизвестный пункт '{raw_sub}' — введите 1-5 или Enter / 0 / b для возврата.",
+                    ))
                 if sub_choice == "0":
                     handled = False
                     break
 
+                _cont_prompt = tr("  Press Enter (or any key) to continue...",
+                                  "  Нажмите Enter (или любую клавишу), чтобы продолжить...")
                 if sub_choice == "1":
                      print()
-                     hint("Enter the path to Antigravity IDE folder or main.js file (or 0 / Enter / b to cancel).")
+                     hint(tr("Enter the path to Antigravity IDE folder or main.js file (or 0 / Enter / b to cancel).",
+                             "Введите путь к папке Antigravity IDE или к файлу main.js (0 / Enter / b — отмена)."))
                      print_path_examples()
-                     raw = _read_path_input("\n  IDE Path > ")
+                     raw = _read_path_input(tr("\n  IDE Path > ", "\n  Путь к IDE > "))
                      if not raw or raw.lower() in _BACK_CHOICES:
-                         cancel("Cancelled.")
+                         cancel(tr("Cancelled.", "Отменено."))
                          continue
                      new_path = resolve_target_path(raw)
                      if new_path and os.path.exists(new_path):
@@ -1671,95 +1856,110 @@ def run_cli():
                              new_path = find_main_js(new_path)
                          if new_path and os.path.isfile(new_path):
                              main_js_path = new_path
-                             ok("Antigravity IDE path updated!")
+                             ok(tr("Antigravity IDE path updated!", "Путь к Antigravity IDE обновлён!"))
                          else:
-                             err("Could not resolve a valid Antigravity IDE target (main.js not found).")
+                             err(tr("Could not resolve a valid Antigravity IDE target (main.js not found).",
+                                    "Не удалось найти корректную цель Antigravity IDE (main.js не найден)."))
                      else:
-                         err("Path does not exist.")
+                         err(tr("Path does not exist.", "Указанный путь не существует."))
                      print()
-                     pause("  Press Enter (or any key) to continue...")
+                     pause(_cont_prompt)
                 elif sub_choice == "2":
                      print()
-                     hint("Enter the path to Antigravity 2.0 app folder or language_server binary (or 0 / Enter / b to cancel).")
+                     hint(tr("Enter the path to Antigravity 2.0 app folder or language_server binary (or 0 / Enter / b to cancel).",
+                             "Введите путь к папке Antigravity 2.0 или бинарнику language_server (0 / Enter / b — отмена)."))
                      print_path_examples()
-                     raw = _read_path_input("\n  Antigravity 2.0 Path > ")
+                     raw = _read_path_input(tr("\n  Antigravity 2.0 Path > ", "\n  Путь к Antigravity 2.0 > "))
                      if not raw or raw.lower() in _BACK_CHOICES:
-                         cancel("Cancelled.")
+                         cancel(tr("Cancelled.", "Отменено."))
                          continue
                      new_path = resolve_manager_path(raw)
                      if new_path and os.path.isfile(new_path):
                          manager_path = new_path
-                         ok("Antigravity 2.0 path updated!")
+                         ok(tr("Antigravity 2.0 path updated!", "Путь к Antigravity 2.0 обновлён!"))
                      else:
-                         err("Could not resolve a valid Antigravity 2.0 target (language_server not found).")
+                         err(tr("Could not resolve a valid Antigravity 2.0 target (language_server not found).",
+                                "Не удалось найти корректную цель Antigravity 2.0 (language_server не найден)."))
                      print()
-                     pause("  Press Enter (or any key) to continue...")
+                     pause(_cont_prompt)
                 elif sub_choice == "3":
                      print()
-                     hint("Enter the path to the agy binary (agy.exe) or its folder (or 0 / Enter / b to cancel).")
+                     hint(tr("Enter the path to the agy binary (agy.exe) or its folder (or 0 / Enter / b to cancel).",
+                             "Введите путь к бинарнику agy (agy.exe) или его папке (0 / Enter / b — отмена)."))
                      print_path_examples()
-                     raw = _read_path_input("\n  AGY Path > ")
+                     raw = _read_path_input(tr("\n  AGY Path > ", "\n  Путь к AGY > "))
                      if not raw or raw.lower() in _BACK_CHOICES:
-                         cancel("Cancelled.")
+                         cancel(tr("Cancelled.", "Отменено."))
                          continue
                      new_path = resolve_agy_path(raw)
                      if new_path and os.path.isfile(new_path):
                          agy_path = new_path
-                         ok("Antigravity CLI path updated!")
+                         ok(tr("Antigravity CLI path updated!", "Путь к Antigravity CLI обновлён!"))
                      else:
-                         err("Could not resolve a valid Antigravity CLI target.")
+                         err(tr("Could not resolve a valid Antigravity CLI target.",
+                                "Не удалось найти корректную цель Antigravity CLI."))
                      print()
-                     pause("  Press Enter (or any key) to continue...")
+                     pause(_cont_prompt)
                 elif sub_choice == "4":
                      print()
-                     hint("Enter the path to extension.js, the google.google-antigravity-*")
-                     hint("extension folder, or the .vscode/extensions root folder (or 0 / Enter / b to cancel).")
-                     raw = _read_path_input("\n  VS Code Extension Path (JS) > ")
+                     hint(tr("Enter the path to extension.js, the google.google-antigravity-*",
+                             "Введите путь к extension.js, папке google.google-antigravity-*"))
+                     hint(tr("extension folder, or the .vscode/extensions root folder (or 0 / Enter / b to cancel).",
+                             "или корневой папке .vscode/extensions (0 / Enter / b — отмена)."))
+                     raw = _read_path_input(tr("\n  VS Code Extension Path (JS) > ", "\n  Путь к расширению VS Code (JS) > "))
                      if not raw or raw.lower() in _BACK_CHOICES:
-                         cancel("Cancelled.")
+                         cancel(tr("Cancelled.", "Отменено."))
                          continue
                      new_path = resolve_extension_path(raw)
                      if new_path and os.path.isfile(new_path):
                          vscode_path = new_path
-                         ok("Antigravity VS Code extension path updated!")
+                         ok(tr("Antigravity VS Code extension path updated!", "Путь к расширению VS Code обновлён!"))
                      else:
-                         err("Could not resolve a valid VS Code extension target (extension.js not found).")
+                         err(tr("Could not resolve a valid VS Code extension target (extension.js not found).",
+                                "Не удалось найти расширение VS Code (extension.js не найден)."))
                      print()
-                     pause("  Press Enter (or any key) to continue...")
+                     pause(_cont_prompt)
                 elif sub_choice == "5":
                      print()
-                     hint(f"Enter the path to the agy/antigravity binary downloaded")
-                     hint(f"by the extension ({describe_gemini_binary_path()}) or any agy file (or 0 / Enter / b to cancel).")
-                     raw = _read_path_input("\n  VS Code Binary Path (agy) > ")
+                     hint(tr("Enter the path to the agy/antigravity binary downloaded",
+                             "Введите путь к бинарнику agy/antigravity, скачанному"))
+                     hint(tr(f"by the extension ({describe_gemini_binary_path()}) or any agy file (or 0 / Enter / b to cancel).",
+                             f"расширением ({describe_gemini_binary_path()}), или к любому файлу agy (0 / Enter / b — отмена)."))
+                     raw = _read_path_input(tr("\n  VS Code Binary Path (agy) > ", "\n  Путь к бинарнику VS Code (agy) > "))
                      if not raw or raw.lower() in _BACK_CHOICES:
-                         cancel("Cancelled.")
+                         cancel(tr("Cancelled.", "Отменено."))
                          continue
                      new_path = resolve_agy_path(raw)
                      if new_path and os.path.isfile(new_path):
                          vscode_agy_path = new_path
-                         ok("VS Code agy binary path updated!")
+                         ok(tr("VS Code agy binary path updated!", "Путь к бинарнику VS Code agy обновлён!"))
                      else:
-                         err("Could not resolve a valid VS Code agy binary target.")
+                         err(tr("Could not resolve a valid VS Code agy binary target.",
+                                "Не удалось найти бинарник VS Code agy."))
                      print()
-                     pause("  Press Enter (or any key) to continue...")
+                     pause(_cont_prompt)
         elif choice == "17":
             show_about()
             print()
-            pause("  Press Enter (or any key) to return to menu...")
+            pause(tr("  Press Enter (or any key) to return to menu...",
+                     "  Нажмите Enter (или любую клавишу) для возврата в меню..."))
             handled = False
         elif choice == "18":
-            print_menu_section("INSTALL ANTIGRAVITY ASSISTANT EXTENSION")
-            info("Deploying Antigravity Assistant extension (Account Switcher, Quotas, Ping)...")
+            print_menu_section(tr("INSTALL ANTIGRAVITY ASSISTANT EXTENSION", "УСТАНОВКА РАСШИРЕНИЯ ANTIGRAVITY ASSISTANT"))
+            info(tr("Deploying Antigravity Assistant extension (Account Switcher, Quotas, Ping)...",
+                    "Установка расширения Antigravity Assistant (переключение аккаунтов, квоты, пинг)..."))
             from patcher.extension_installer import deploy_assistant_extension
             res = deploy_assistant_extension(export_vsix=True)
             if res:
-                ok("Antigravity Assistant successfully installed to Antigravity IDE and VS Code!")
-                hint("Status Bar item $(shield) will appear on next editor launch.")
+                ok(tr("Antigravity Assistant successfully installed to Antigravity IDE and VS Code!",
+                      "Antigravity Assistant успешно установлен в Antigravity IDE и VS Code!"))
+                hint(tr("Status Bar item $(shield) will appear on next editor launch.",
+                        "Иконка $(shield) появится в нижней панели после запуска редактора."))
             else:
-                err("Failed to deploy extension.")
+                err(tr("Failed to deploy extension.", "Не удалось установить расширение."))
             handled = True
         elif choice == "19":
-            print_menu_section("CHECK FOR CLOUD UPDATES")
+            print_menu_section(tr("CHECK FOR CLOUD UPDATES", "ПРОВЕРКА ОБНОВЛЕНИЙ ПАТЧЕРА"))
             from patcher.utils.update import perform_cloud_update
             perform_cloud_update(interactive=False)
             handled = True

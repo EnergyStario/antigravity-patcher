@@ -7,6 +7,7 @@ import webbrowser
 
 from patcher.constants import VERSION, GITHUB_REPO, COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW, COLOR_RED, COLOR_BOLD, COLOR_UNDERLINE
 from patcher.utils.console import color, link, info, ok, warn, err, hint, _frame_border, _frame_row
+from patcher.utils.i18n import tr
 
 
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
@@ -42,11 +43,14 @@ def print_update_status_notice():
         return
     elif isinstance(LAST_UPDATE_RESULT, tuple) and LAST_UPDATE_RESULT[0] == "update_available":
         _, tag, url = LAST_UPDATE_RESULT
-        info(f"New version available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})")
-        hint(f"Download: {color(url, COLOR_CYAN)}")
+        info(tr(
+            f"New version available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})",
+            f"Доступна новая версия: {color(tag, COLOR_GREEN, COLOR_BOLD)} (текущая: {color(VERSION, COLOR_YELLOW)})",
+        ))
+        hint(tr(f"Download: {color(url, COLOR_CYAN)}", f"Скачать: {color(url, COLOR_CYAN)}"))
         print()
     elif LAST_UPDATE_RESULT == "up_to_date":
-        ok(f"Patcher is up to date (v{VERSION})")
+        ok(tr(f"Patcher is up to date (v{VERSION})", f"Патчер актуален (v{VERSION})"))
         print()
 
 
@@ -119,10 +123,13 @@ def perform_cloud_update(interactive=False) -> bool:
     import shutil
     from pathlib import Path
 
-    info("Checking for cloud updates on GitHub...")
+    info(tr("Checking for cloud updates on GitHub...", "Проверка обновлений патчера на GitHub..."))
     rel = _fetch_latest_release_info(timeout=8)
     if not rel or not rel.get("tag"):
-        err("Could not connect to GitHub releases API (check your internet or GitHub repo).")
+        err(tr(
+            "Could not connect to GitHub releases API (check your internet or GitHub repo).",
+            "Не удалось подключиться к GitHub Releases API (проверьте интернет).",
+        ))
         return False
 
     latest_tag = rel["tag"]
@@ -130,13 +137,16 @@ def perform_cloud_update(interactive=False) -> bool:
     latest = _parse_version(latest_tag)
 
     if latest <= current:
-        ok(f"You already have the latest version (v{VERSION})!")
+        ok(tr(f"You already have the latest version (v{VERSION})!", f"У вас уже установлена последняя версия (v{VERSION})!"))
         return True
 
     print()
-    ok(f"New cloud version found: {color(latest_tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})")
+    ok(tr(
+        f"New cloud version found: {color(latest_tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})",
+        f"Найдена новая версия: {color(latest_tag, COLOR_GREEN, COLOR_BOLD)} (текущая: {color(VERSION, COLOR_YELLOW)})",
+    ))
     if rel.get("body"):
-        hint("Release notes:")
+        hint(tr("Release notes:", "Список изменений:"))
         for line in rel["body"].strip().splitlines()[:6]:
             print(f"    {line}")
         print()
@@ -167,8 +177,14 @@ def perform_cloud_update(interactive=False) -> bool:
                 break
 
     if not target_asset or not target_asset.get("browser_download_url"):
-        warn(f"No direct binary asset found for this platform in release {latest_tag}.")
-        hint(f"Open releases page to download manually: {color(rel.get('html_url') or RELEASES_URL, COLOR_CYAN)}")
+        warn(tr(
+            f"No direct binary asset found for this platform in release {latest_tag}.",
+            f"Не найден готовый файл для этой платформы в релизе {latest_tag}.",
+        ))
+        hint(tr(
+            f"Open releases page to download manually: {color(rel.get('html_url') or RELEASES_URL, COLOR_CYAN)}",
+            f"Откройте страницу релизов для ручного скачивания: {color(rel.get('html_url') or RELEASES_URL, COLOR_CYAN)}",
+        ))
         webbrowser.open(rel.get("html_url") or RELEASES_URL)
         return False
 
@@ -176,10 +192,11 @@ def perform_cloud_update(interactive=False) -> bool:
     file_name = target_asset["name"]
     file_size_mb = target_asset.get("size", 0) / (1024 * 1024)
 
-    hint(f"Package: {color(file_name, COLOR_CYAN)} ({file_size_mb:.1f} MB)")
+    hint(tr(f"Package: {color(file_name, COLOR_CYAN)} ({file_size_mb:.1f} MB)",
+            f"Файл: {color(file_name, COLOR_CYAN)} ({file_size_mb:.1f} МБ)"))
 
     print()
-    info(f"Downloading {file_name} from GitHub...")
+    info(tr(f"Downloading {file_name} from GitHub...", f"Скачивание {file_name} с GitHub..."))
     import tempfile
     temp_dir = Path(tempfile.gettempdir())
     temp_file = temp_dir / f"ag_patcher_update_{latest_tag}.exe"
@@ -203,13 +220,14 @@ def perform_cloud_update(interactive=False) -> bool:
                     pct = int(downloaded * 100 / total_size)
                     mb = downloaded / (1024 * 1024)
                     tot_mb = total_size / (1024 * 1024)
-                    sys.stdout.write(f"\r  [+] Downloading: {mb:.1f}/{tot_mb:.1f} MB ({pct}%)")
+                    dl_lbl = tr("Downloading", "Загрузка")
+                    sys.stdout.write(f"\r  [+] {dl_lbl}: {mb:.1f}/{tot_mb:.1f} MB ({pct}%)")
                     sys.stdout.flush()
         print()
-        ok("Download complete!")
+        ok(tr("Download complete!", "Загрузка завершена!"))
     except Exception as e:
         print()
-        err(f"Download failed: {e}")
+        err(tr(f"Download failed: {e}", f"Ошибка загрузки: {e}"))
         return False
 
     # Apply update and restart
@@ -223,14 +241,15 @@ start "" "{current_exe}"
 del "%~f0"
 exit
 """, encoding="ascii")
-        ok("Restarting into updated version...")
+        ok(tr("Restarting into updated version...", "Перезапуск в новую версию..."))
         import subprocess
         subprocess.Popen(["cmd.exe", "/c", str(updater_bat)], creationflags=0x08000000 | 0x00000200)
         sys.exit(0)
     else:
         dest = Path.cwd() / file_name
         shutil.copy2(temp_file, dest)
-        ok(f"New binary saved to: {color(str(dest), COLOR_CYAN)}")
+        ok(tr(f"New binary saved to: {color(str(dest), COLOR_CYAN)}",
+              f"Новая версия сохранена в: {color(str(dest), COLOR_CYAN)}"))
         return True
 
 
@@ -255,26 +274,29 @@ def check_for_updates(silent=True, timeout=5):
     if latest > current:
         LAST_UPDATE_RESULT = ("update_available", tag, url)
         if not silent:
-            info(f"New version available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})")
-            hint(f"Download: {color(url, COLOR_CYAN)}")
+            info(tr(
+                f"New version available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})",
+                f"Доступна новая версия: {color(tag, COLOR_GREEN, COLOR_BOLD)} (текущая: {color(VERSION, COLOR_YELLOW)})",
+            ))
+            hint(tr(f"Download: {color(url, COLOR_CYAN)}", f"Скачать: {color(url, COLOR_CYAN)}"))
         return True
 
     LAST_UPDATE_RESULT = "up_to_date"
     if not silent:
-        ok(f"Already up to date (v{VERSION})")
+        ok(tr(f"Already up to date (v{VERSION})", f"Установлена актуальная версия (v{VERSION})"))
     return False
 
 
 def open_releases_page():
     """Open the GitHub releases page in the default browser."""
     webbrowser.open(RELEASES_URL)
-    ok(f"Opening: {color(RELEASES_URL, COLOR_CYAN)}")
+    ok(tr(f"Opening: {color(RELEASES_URL, COLOR_CYAN)}", f"Открываю: {color(RELEASES_URL, COLOR_CYAN)}"))
 
 
 def open_issues_page():
     """Open the GitHub issues page in the default browser."""
     webbrowser.open(ISSUES_URL)
-    ok(f"Opening: {color(ISSUES_URL, COLOR_CYAN)}")
+    ok(tr(f"Opening: {color(ISSUES_URL, COLOR_CYAN)}", f"Открываю: {color(ISSUES_URL, COLOR_CYAN)}"))
 
 
 def handle_patch_failure():
@@ -287,22 +309,31 @@ def handle_patch_failure():
     from patcher.cli import confirmed
 
     print()
-    info("Checking for patcher updates...")
+    info(tr("Checking for patcher updates...", "Проверка обновлений патчера..."))
     has_update = check_for_updates(silent=True)
 
     if has_update and isinstance(LAST_UPDATE_RESULT, tuple) and LAST_UPDATE_RESULT[0] == "update_available":
         _, tag, url = LAST_UPDATE_RESULT
-        info(f"An update for Antigravity Patcher is available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})")
-        hint(f"Download: {color(url, COLOR_CYAN)}")
-        if confirmed("A patcher update is available. Would you like to open the releases page to install it?"):
+        info(tr(
+            f"An update for Antigravity Patcher is available: {color(tag, COLOR_GREEN, COLOR_BOLD)} (current: {color(VERSION, COLOR_YELLOW)})",
+            f"Доступно обновление Antigravity Patcher: {color(tag, COLOR_GREEN, COLOR_BOLD)} (текущая: {color(VERSION, COLOR_YELLOW)})",
+        ))
+        hint(tr(f"Download: {color(url, COLOR_CYAN)}", f"Скачать: {color(url, COLOR_CYAN)}"))
+        if confirmed(tr(
+            "A patcher update is available. Would you like to open the releases page to install it?",
+            "Доступно обновление патчера. Открыть страницу релизов для скачивания?",
+        )):
             webbrowser.open(url or RELEASES_URL)
-            ok(f"Opening: {color(url or RELEASES_URL, COLOR_CYAN)}")
+            ok(tr(f"Opening: {color(url or RELEASES_URL, COLOR_CYAN)}", f"Открываю: {color(url or RELEASES_URL, COLOR_CYAN)}"))
     else:
         if LAST_UPDATE_RESULT == "up_to_date":
-            ok(f"You are using the latest version of Antigravity Patcher (v{VERSION}).")
+            ok(tr(
+                f"You are using the latest version of Antigravity Patcher (v{VERSION}).",
+                f"Вы используете последнюю версию Antigravity Patcher (v{VERSION}).",
+            ))
 
-        hint(f"Issue tracker: {color(ISSUES_URL, COLOR_CYAN)}")
-        if confirmed("Would you like to open GitHub to create an issue?"):
+        hint(tr(f"Issue tracker: {color(ISSUES_URL, COLOR_CYAN)}", f"Трекер проблем: {color(ISSUES_URL, COLOR_CYAN)}"))
+        if confirmed(tr("Would you like to open GitHub to create an issue?", "Открыть GitHub для создания issue?")):
             webbrowser.open(ISSUES_URL)
-            ok(f"Opening: {color(ISSUES_URL, COLOR_CYAN)}")
+            ok(tr(f"Opening: {color(ISSUES_URL, COLOR_CYAN)}", f"Открываю: {color(ISSUES_URL, COLOR_CYAN)}"))
 

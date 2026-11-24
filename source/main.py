@@ -93,6 +93,19 @@ def _run_studio_daemon() -> int:
 
 if __name__ == "__main__":
     argv_list = sys.argv[1:]
+    if "--lang" in argv_list:
+        l_idx = argv_list.index("--lang")
+        if l_idx + 1 < len(argv_list):
+            from patcher.utils.i18n import set_lang, SUPPORTED_LANGS
+            cand_lang = argv_list[l_idx + 1].strip().lower()
+            if cand_lang in SUPPORTED_LANGS:
+                set_lang(cand_lang)
+    for _tok in argv_list:
+        if _tok.startswith("--lang="):
+            from patcher.utils.i18n import set_lang, SUPPORTED_LANGS
+            cand_lang = _tok.split("=", 1)[1].strip().lower()
+            if cand_lang in SUPPORTED_LANGS:
+                set_lang(cand_lang)
     if "--studio-daemon" in argv_list:
         sys.exit(_run_studio_daemon())
     if "--switch-account" in argv_list:
@@ -103,6 +116,7 @@ if __name__ == "__main__":
 
     from patcher.utils.admin import is_admin, run_as_admin
     from patcher.utils.instance import acquire_instance_lock, release_instance_lock
+    from patcher.utils.i18n import tr
 
     if not studio_mode and not autopilot_heal_mode:
         from patcher.utils.console import setup_console
@@ -116,11 +130,13 @@ if __name__ == "__main__":
         elif run_as_admin():
             sys.exit(0)
         else:
-            print("  [!] Could not elevate privileges. The script may fail to modify files.")
+            print(tr("  [!] Could not elevate privileges. The script may fail to modify files.",
+                     "  [!] Не удалось повысить права. Патчеру могут быть недоступны системные файлы."))
     elif not studio_mode and os.name == "posix" and not is_admin() and not auto_patch_mode and not autopilot_heal_mode:
         from patcher.cli import confirmed
-        print("  [!] Root access is required to patch files in the root directory.")
-        if confirmed("Re-launch with sudo?"):
+        print(tr("  [!] Root access is required to patch files in the root directory.",
+                 "  [!] Для изменения системных файлов требуются права root."))
+        if confirmed(tr("Re-launch with sudo?", "Перезапустить с sudo?")):
             try:
                 if getattr(sys, "frozen", False):
                     args = ["sudo", sys.executable] + sys.argv[1:]
@@ -149,8 +165,10 @@ if __name__ == "__main__":
         )
         if not acquire_instance_lock(lock_name):
             if not auto_patch_mode and not autopilot_heal_mode:
-                print("  [!] Another instance of Antigravity Patcher is already running.")
-                print("  [i] Please close the other patcher window before running a new one.")
+                print(tr("  [!] Another instance of Antigravity Patcher is already running.",
+                         "  [!] Другая копия Antigravity Patcher уже запущена."))
+                print(tr("  [i] Please close the other patcher window before running a new one.",
+                         "  [i] Закройте другое окно патчера перед запуском нового."))
             sys.exit(0)
 
     try:
@@ -224,27 +242,29 @@ if __name__ == "__main__":
             from patcher.cli import run_cli
             run_cli()
     except KeyboardInterrupt:
-        print("\n  [i] Exiting...")
+        print(tr("\n  [i] Exiting...", "\n  [i] Выход..."))
         sys.exit(0)
     except (PermissionError, OSError) as e:
-        # Страховка от необработанного traceback как на скриншоте
-        # (бэкап language_server.agybak -> Errno 1 Operation not permitted):
-        # вместо "Failed to execute script 'main'" показываем понятную подсказку.
-        print(f"\n  [!] Filesystem error: {e}")
+        print(tr(f"\n  [!] Filesystem error: {e}", f"\n  [!] Ошибка файловой системы: {e}"))
         import sys as _sys
 
         if _sys.platform == "darwin":
-            print("  [i] macOS blocked writing inside Antigravity.app.")
-            print("  [i] Close Antigravity and re-run with sudo:")
+            print(tr("  [i] macOS blocked writing inside Antigravity.app.",
+                     "  [i] macOS заблокировала запись внутрь Antigravity.app."))
+            print(tr("  [i] Close Antigravity and re-run with sudo:",
+                     "  [i] Закройте Antigravity и перезапустите с sudo:"))
             print("        sudo python source/main.py   (or sudo ./Antigravity_Patcher_macOS_arm64)")
-            print("  [i] If it still says 'Operation not permitted', check flags:")
+            print(tr("  [i] If it still says 'Operation not permitted', check flags:",
+                     "  [i] Если всё равно пишет 'Operation not permitted', проверьте флаги:"))
             print("        ls -lO /Applications/Antigravity.app/Contents/resources/bin/language_server")
         else:
-            print("  [i] No write access — re-run as admin/root and close Antigravity first.")
+            print(tr("  [i] No write access — re-run as admin/root and close Antigravity first.",
+                     "  [i] Нет прав на запись — запустите от имени администратора/root и закройте Antigravity."))
         sys.exit(1)
     except Exception as e:
-        print(f"\n  [!] Unexpected error: {e}")
-        print("  [i] Please report it: https://github.com/EnergyStario/antigravity-patcher/issues")
+        print(tr(f"\n  [!] Unexpected error: {e}", f"\n  [!] Непредвиденная ошибка: {e}"))
+        print(tr("  [i] Please report it: https://github.com/EnergyStario/antigravity-patcher/issues",
+                 "  [i] Сообщить об ошибке: https://github.com/EnergyStario/antigravity-patcher/issues"))
         sys.exit(1)
     finally:
         release_instance_lock()

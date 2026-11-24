@@ -38,6 +38,7 @@ from patcher.utils.console import (
     COLOR_CYAN, COLOR_RED, COLOR_YELLOW, COLOR_GREEN,
     COLOR_BOLD, COLOR_DIM, COLOR_WHITE,
 )
+from patcher.utils.i18n import tr
 
 _SYSTEM = platform.system()
 
@@ -957,7 +958,7 @@ def restore_latest_backup() -> bool:
     """Restore index from the most recent backup file."""
     backups = list_backups()
     if not backups:
-        err("No previous trajectory index backups found.")
+        err(tr("No previous trajectory index backups found.", "Резервные копии индекса диалогов не найдены."))
         return False
 
     latest_name, latest_path, _ = backups[0]
@@ -965,12 +966,12 @@ def restore_latest_backup() -> bool:
         with open(latest_path, "r", encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
-            err("Backup file is empty.")
+            err(tr("Backup file is empty.", "Файл резервной копии пуст."))
             return False
 
         dbs = get_db_candidates()
         if not dbs:
-            err("No state.vscdb found to restore into.")
+            err(tr("No state.vscdb found to restore into.", "База state.vscdb не найдена."))
             return False
 
         restored_count = 0
@@ -987,10 +988,13 @@ def restore_latest_backup() -> bool:
             finally:
                 conn.close()
 
-        ok(f"Restored previous conversation index from {latest_name} into {restored_count} database(s).")
+        ok(tr(
+            f"Restored previous conversation index from {latest_name} into {restored_count} database(s).",
+            f"Индекс диалогов восстановлен из {latest_name} (баз обновлено: {restored_count}).",
+        ))
         return True
     except Exception as ex:
-        err(f"Rollback failed: {ex}")
+        err(tr(f"Rollback failed: {ex}", f"Ошибка отката: {ex}"))
         return False
 
 
@@ -1083,60 +1087,74 @@ def rebuild_conversations_index(auto_workspaces: bool = True) -> Dict[str, int]:
 
 def run_rebuild_wizard() -> bool:
     """Full interactive wizard for repairing and ordering conversation history."""
-    print_menu_section("REBUILD & REPAIR CONVERSATION HISTORY")
+    print_menu_section(tr("REBUILD & REPAIR CONVERSATION HISTORY", "ВОССТАНОВЛЕНИЕ И СОРТИРОВКА ИСТОРИИ ЧАТОВ"))
     print()
-    info("Repairs missing, out-of-order, or broken conversation histories.")
-    info("Scans disk, restores titles and project bindings, and sorts chronologically.")
+    info(tr("Repairs missing, out-of-order, or broken conversation histories.",
+            "Восстанавливает пропавшие, перепутанные или повреждённые диалоги."))
+    info(tr("Scans disk, restores titles and project bindings, and sorts chronologically.",
+            "Сканирует диск, восстанавливает названия и привязки проектов, сортирует по дате."))
     print()
 
     # Process Guard
     proc = check_ide_running()
     if proc:
-        warn(f"Antigravity IDE appears to be running ({proc}).")
-        warn("Please close Antigravity IDE completely (File -> Exit) before rebuilding.")
+        warn(tr(f"Antigravity IDE appears to be running ({proc}).",
+                f"Antigravity IDE сейчас запущена ({proc})."))
+        warn(tr("Please close Antigravity IDE completely (File -> Exit) before rebuilding.",
+                "Закройте Antigravity IDE полностью перед пересборкой индекса."))
         print()
-        hint("If Antigravity is open, it may overwrite the index when closing.")
+        hint(tr("If Antigravity is open, it may overwrite the index when closing.",
+                "Если IDE открыта, при закрытии она может перезаписать индекс."))
         print()
         try:
-            yn = input(color("  Proceed anyway? (y/n) > ", COLOR_YELLOW, COLOR_BOLD)).strip().lower()
+            yn = input(color(tr("  Proceed anyway? (y/n) > ", "  Продолжить всё равно? (y/n) > "), COLOR_YELLOW, COLOR_BOLD)).strip().lower()
         except (EOFError, KeyboardInterrupt):
             yn = "n"
         if yn not in ("y", "yes", "д", "да"):
-            cancel("Operation cancelled.")
+            cancel(tr("Operation cancelled.", "Операция отменена."))
             return False
 
     dbs = get_db_candidates()
     if not dbs:
-        err("No Antigravity state.vscdb databases found.")
-        hint(r"Expected at: %APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb")
+        err(tr("No Antigravity state.vscdb databases found.", "Базы state.vscdb Antigravity не найдены."))
+        hint(tr(r"Expected at: %APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb",
+                r"Ожидается по пути: %APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb"))
         return None
 
     catalog = collect_all_conversations()
     if not catalog:
-        warn("No conversation records found on disk (~/.gemini/antigravity/conversations).")
+        warn(tr("No conversation records found on disk (~/.gemini/antigravity/conversations).",
+                "На диске не найдено файлов диалогов (~/.gemini/antigravity/conversations)."))
         return None
 
-    step("Discovered databases", True, f"{len(dbs)} instance(s) found")
-    step("Discovered conversations", True, f"{len(catalog)} conversation(s) located on disk")
+    step(tr("Discovered databases", "Найдено баз"), True,
+         tr(f"{len(dbs)} instance(s) found", f"экземпляров: {len(dbs)}"))
+    step(tr("Discovered conversations", "Найдено диалогов"), True,
+         tr(f"{len(catalog)} conversation(s) located on disk", f"файлов на диске: {len(catalog)}"))
 
     backups = list_backups()
     if backups:
         print()
-        hint(f"Found {len(backups)} existing backup(s). You can rollback anytime.")
+        hint(tr(f"Found {len(backups)} existing backup(s). You can rollback anytime.",
+                f"Найдено резервных копий: {len(backups)}. Можно откатиться в любой момент."))
 
     print()
-    print_menu_row("1", "Auto-rebuild and re-order all conversations (Recommended)", "auto-detect titles & workspaces", COLOR_GREEN)
+    print_menu_row("1", tr("Auto-rebuild and re-order all conversations (Recommended)",
+                           "Пересобрать и отсортировать все чаты (Рекомендуется)"),
+                   tr("auto-detect titles & workspaces", "восстановить названия и проекты"), COLOR_GREEN)
     if backups:
-        print_menu_row("2", "Rollback to previous index backup", f"restore from {backups[0][0]}", COLOR_YELLOW)
-    print_menu_row("0", "Back / Cancel", "Enter / 0 / b — return to main menu", COLOR_RED)
+        print_menu_row("2", tr("Rollback to previous index backup", "Откатиться к резервной копии индекса"),
+                       tr(f"restore from {backups[0][0]}", f"из {backups[0][0]}"), COLOR_YELLOW)
+    print_menu_row("0", tr("Back / Cancel", "Назад / Отмена"),
+                   tr("Enter / 0 / b — return to main menu", "Enter / 0 / b — в главное меню"), COLOR_RED)
     print()
 
     try:
-        choice = input(color("  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
+        choice = input(color(tr("  Select option > ", "  Выберите пункт > "), COLOR_CYAN, COLOR_BOLD)).strip().lower()
     except (EOFError, KeyboardInterrupt):
         choice = "0"
     if choice.lstrip("\x1b") in ("0", "", "b", "back", "q", "quit", "exit", "назад"):
-        cancel("Cancelled.")
+        cancel(tr("Cancelled.", "Отменено."))
         return False
 
     if choice == "2" and backups:
@@ -1144,19 +1162,26 @@ def run_rebuild_wizard() -> bool:
 
     if choice == "1":
         print()
-        step("Processing", True, "Analyzing conversation databases & brain logs...")
+        step(tr("Processing", "Обработка"), True,
+             tr("Analyzing conversation databases & brain logs...", "Анализ баз диалогов и brain-логов..."))
         stats = rebuild_conversations_index(auto_workspaces=True)
         print()
-        ok("Successfully rebuilt conversation trajectory index!")
+        ok(tr("Successfully rebuilt conversation trajectory index!", "Индекс истории диалогов успешно пересобран!"))
         print()
-        print(f"  {color('Total conversations indexed:', COLOR_WHITE, COLOR_BOLD)} {stats['total']}")
-        print(f"    - Titles extracted from chat prompts:    {stats.get('database', 0)}")
-        print(f"    - Titles extracted from brain transcripts: {stats.get('brain_log', 0)}")
-        print(f"    - Titles extracted from task markdown:     {stats.get('brain_md', 0)}")
-        print(f"    - Titles preserved from existing index:    {stats.get('preserved', 0)}")
-        print(f"    - Workspaces attached to projects:         {stats.get('workspaces', 0)}")
+        print(f"  {color(tr('Total conversations indexed:', 'Всего диалогов в индексе:'), COLOR_WHITE, COLOR_BOLD)} {stats['total']}")
+        print(tr(f"    - Titles extracted from chat prompts:    {stats.get('database', 0)}",
+                 f"    - Заголовков из базы чата:               {stats.get('database', 0)}"))
+        print(tr(f"    - Titles extracted from brain transcripts: {stats.get('brain_log', 0)}",
+                 f"    - Заголовков из brain-логов:             {stats.get('brain_log', 0)}"))
+        print(tr(f"    - Titles extracted from task markdown:     {stats.get('brain_md', 0)}",
+                 f"    - Заголовков из markdown задач:          {stats.get('brain_md', 0)}"))
+        print(tr(f"    - Titles preserved from existing index:    {stats.get('preserved', 0)}",
+                 f"    - Сохранено из старого индекса:          {stats.get('preserved', 0)}"))
+        print(tr(f"    - Workspaces attached to projects:         {stats.get('workspaces', 0)}",
+                 f"    - Привязано к рабочим папкам проектов:   {stats.get('workspaces', 0)}"))
         print()
-        hint("Restart Antigravity IDE to see your conversations restored in chronological order!")
+        hint(tr("Restart Antigravity IDE to see your conversations restored in chronological order!",
+                "Перезапустите Antigravity IDE, чтобы увидеть чаты в хронологическом порядке!"))
         return True
 
     return False
