@@ -81,6 +81,7 @@ const NET_CACHE_TTL_MS = 45000;
 let _failoverToastLastShownAt = 0;    // throttle: max 1 toast per 60 s
 let _failoverLogWatchers = [];         // fs.watch handles on LS log dirs
 let _failoverLogDebounceTimer = null;
+let _failoverLogPollTimer = null;      // periodic fallback poll (Windows fs.watch buffers)
 let _failoverLogLastOffset = new Map(); // path -> bytesRead (avoid re-scanning)
 
 // Paths
@@ -571,27 +572,49 @@ function tryRestorePreviousConversation() {
             }, 6000);
 
             // Resume injection: after conversation is open, send the resume message so the agent
-            // knows to continue the interrupted task. Delayed 7s to ensure the conversation
+            // knows to continue the interrupted task. Delayed 6.5s to ensure the conversation
             // panel is fully loaded and the new account is authenticated.
             if (resumeMsg) {
+                const isAutoResume = Boolean(data.auto_send_resume || resumeReason === '429_account_hop');
+                const modelNote = data.model ? ` (${data.model})` : '';
                 setTimeout(async () => {
                     try {
-                        // Show a toast first so the user understands what's happening
+                        if (isAutoResume) {
+                            let sent = await dispatchPromptToChatPanel(resumeMsg);
+                            if (!sent) {
+                                await new Promise((r) => setTimeout(r, 2500));
+                                sent = await dispatchPromptToChatPanel(resumeMsg);
+                            }
+                            if (sent) {
+                                console.log('[ag-toolkit] Auto-resume message injected into chat.');
+                                vscode.window.showInformationMessage(
+                                    `⏩ Автосмена аккаунта выполнена${modelNote}: отправлено "${resumeMsg}".`
+                                );
+                            } else {
+                                try {
+                                    await vscode.env.clipboard.writeText(resumeMsg);
+                                } catch (_) {}
+                                vscode.window.showInformationMessage(
+                                    `⏩ Аккаунт переключён${modelNote}. Вставьте в чат "${resumeMsg}" (уже скопировано).`
+                                );
+                            }
+                            return;
+                        }
+
+                        // Manual switch toast confirmation
                         const reason = resumeReason === '429_account_switch'
-                            ? 'аккаунт сменён из-за исчерпания квоты (429)'
+                            ? 'аккаунт сменён'
                             : 'восстановление после перезапуска';
                         const choice = await vscode.window.showInformationMessage(
-                            `⏩ Продолжить прерванную задачу? (${reason})`,
+                            `⏩ Продолжить прерванную задачу${modelNote}? (${reason})`,
                             'Да, продолжить',
                             'Нет'
                         );
                         if (choice === 'Да, продолжить') {
-                            // Attempt to send "continue" directly into the active chat
                             const sent = await dispatchPromptToChatPanel(resumeMsg);
                             if (sent) {
                                 console.log('[ag-toolkit] Resume message injected into chat.');
                             } else {
-                                // Fallback: copy to clipboard and show instruction
                                 try {
                                     await vscode.env.clipboard.writeText(resumeMsg);
                                 } catch (_) {}
@@ -603,7 +626,7 @@ function tryRestorePreviousConversation() {
                     } catch (e) {
                         console.log('[ag-toolkit] Resume injection error:', e.message);
                     }
-                }, 7000);
+                }, isAutoResume ? 6500 : 7000);
             }
         }
     } catch (e) {
@@ -869,12 +892,7 @@ function runAccountSwitcherAsync(args, timeoutMs = 30000) {
     return new Promise((resolve) => {
         const script = getSwitcherScriptPath();
         if (!fs.existsSync(script)) return resolve(null);
-        exec(`python "${script}" ${args}`, {
-            encoding: 'utf8',
-            timeout: timeoutMs || 30000,
-            windowsHide: true,
-            env: getCleanPythonEnv()
-        }, (err, stdout) => {
+        const onDone = (err, stdout) => {
             if (err) {
                 console.error('Account switcher async error:', err);
                 return resolve(null);
@@ -889,7 +907,18 @@ function runAccountSwitcherAsync(args, timeoutMs = 30000) {
                 console.error('Account switcher async parse error:', e);
                 resolve(null);
             }
-        });
+        };
+        const opts = {
+            encoding: 'utf8',
+            timeout: timeoutMs || 30000,
+            windowsHide: true,
+            env: getCleanPythonEnv()
+        };
+        if (Array.isArray(args)) {
+            execFile('python', [script, ...args], opts, onDone);
+        } else {
+            exec(`python "${script}" ${args}`, opts, onDone);
+        }
     });
 }
 
@@ -1817,7 +1846,7 @@ async function showMainMenu() {
 
     const policyLabels = {
         interactive: 'Спрашивать каждый раз',
-        account_hop: 'Авто: сменить аккаунт',
+        account_hop: 'Авто: смена аккаунта + «continue»',
         model_fallback: 'Авто: быстрый Flash'
     };
     const eng = getQuotaEngine();
@@ -2816,22 +2845,76 @@ function logTextHas429(logText) {
 }
 
 /**
- * Scan all recent log files in a directory for 429 signals.
+ * Collect recent log/txt files under dirPath (supports nested IDE session subdirs up to depth 3).
+ */
+function collect429CandidateFiles(dirPath, maxFiles = 6, maxAgeMs = 30 * 60 * 1000) {
+    const out = [];
+    const now = Date.now();
+    const walk = (curDir, depth) => {
+        if (depth > 5) return;
+        let entries;
+        try {
+            entries = fs.readdirSync(curDir, { withFileTypes: true });
+        } catch (_) {
+            return;
+        }
+        const subDirs = [];
+        for (const ent of entries) {
+            const full = path.join(curDir, ent.name);
+            try {
+                if (ent.isFile() && /\.(log|txt)$/i.test(ent.name)) {
+                    const st = fs.statSync(full);
+                    if ((now - st.mtimeMs) <= maxAgeMs) {
+                        out.push({ path: full, mtimeMs: st.mtimeMs, size: st.size });
+                    }
+                } else if (ent.isDirectory() && depth < 5) {
+                    const st = fs.statSync(full);
+                    if ((now - st.mtimeMs) <= maxAgeMs) {
+                        subDirs.push({ path: full, mtimeMs: st.mtimeMs });
+                    }
+                }
+            } catch (_) {}
+        }
+        subDirs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+        for (const sd of subDirs.slice(0, 3)) {
+            walk(sd.path, depth + 1);
+        }
+    };
+    walk(dirPath, 0);
+    out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return out.slice(0, maxFiles);
+}
+
+/**
+ * Seed initial offsets so historical 429 entries from closed sessions never trigger on startup.
+ */
+function seed429LogOffsets() {
+    const dirs = get429WatchDirs();
+    for (const dir of dirs) {
+        const files = collect429CandidateFiles(dir, 8, 60 * 60 * 1000);
+        for (const f of files) {
+            if (!_failoverLogLastOffset.has(f.path)) {
+                _failoverLogLastOffset.set(f.path, f.size);
+            }
+        }
+    }
+}
+
+/**
+ * Scan all recent log files in a directory (including nested session folders) for 429 signals.
  * Only reads the tail since last-known offset.
  */
 function checkDirFor429(dirPath) {
     try {
-        const files = fs.readdirSync(dirPath)
-            .filter((f) => /\.(log|txt)$/i.test(f))
-            .map((f) => path.join(dirPath, f))
-            .filter((f) => { try { return fs.statSync(f).isFile(); } catch (_) { return false; } })
-            .sort((a, b) => {
-                try { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; } catch (_) { return 0; }
-            })
-            .slice(0, 5); // only the 5 most-recent log files
-
-        for (const fp of files) {
-            const tail = readLogTail(fp);
+        const files = collect429CandidateFiles(dirPath, 6, 30 * 60 * 1000);
+        for (const item of files) {
+            if (!_failoverLogLastOffset.has(item.path)) {
+                // First time seeing this file after startup: scan tail up to 16KB if active recently, else seed at EOF
+                const ageMs = Date.now() - item.mtimeMs;
+                const seed = ageMs <= 30000 ? Math.max(0, item.size - 16384) : item.size;
+                _failoverLogLastOffset.set(item.path, seed);
+            }
+            const tail = readLogTail(item.path);
             if (tail && logTextHas429(tail)) return true;
         }
     } catch (_) {}
@@ -2853,11 +2936,12 @@ function onLogFileChanged() {
 }
 
 /**
- * Set up fs.watch watchers on LS log directories.
+ * Set up fs.watch watchers + 10s periodic poll on LS log directories.
  * Uses debouncing to avoid hammering disk on every write.
  */
 function setup429LogWatchers() {
     dispose429LogWatchers();
+    seed429LogOffsets();
     const dirs = get429WatchDirs();
     for (const dir of dirs) {
         try {
@@ -2874,6 +2958,12 @@ function setup429LogWatchers() {
             _failoverLogWatchers.push(w);
         } catch (_) {}
     }
+    _failoverLogPollTimer = setInterval(() => {
+        if (isWindowFocused()) {
+            onLogFileChanged();
+        }
+    }, 10000);
+    if (typeof _failoverLogPollTimer.unref === 'function') _failoverLogPollTimer.unref();
 }
 
 /** Remove all log watchers. */
@@ -2881,6 +2971,10 @@ function dispose429LogWatchers() {
     if (_failoverLogDebounceTimer) {
         clearTimeout(_failoverLogDebounceTimer);
         _failoverLogDebounceTimer = null;
+    }
+    if (_failoverLogPollTimer) {
+        clearInterval(_failoverLogPollTimer);
+        _failoverLogPollTimer = null;
     }
     for (const w of _failoverLogWatchers) {
         try { w.close(); } catch (_) {}
@@ -3115,6 +3209,36 @@ async function show429Toast(currentModel) {
     }
 }
 
+function _saveAutoResumeConversation(currentModel) {
+    const activeConvoId = getActiveConversationId();
+    if (!activeConvoId) return;
+    try {
+        if (!fs.existsSync(agToolsDir)) fs.mkdirSync(agToolsDir, { recursive: true });
+        const restoreFile = path.join(agToolsDir, 'restore_conversation.json');
+        fs.writeFileSync(restoreFile, JSON.stringify({
+            cascadeId: activeConvoId,
+            timestamp: Date.now(),
+            resume_message: 'continue',
+            resume_reason: '429_account_hop',
+            auto_send_resume: true,
+            model: currentModel || 'claude'
+        }), 'utf8');
+    } catch (_) {}
+}
+
+function _buildSwitchRestartArgs(targetArg) {
+    const currentWorkspace = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0)
+        ? vscode.workspace.workspaceFolders[0].uri.fsPath
+        : '';
+    const appName = (vscode.env && vscode.env.appName) ? String(vscode.env.appName) : '';
+    const appTarget = /visual studio code/i.test(appName) ? 'code' : 'ide';
+    const args = ['switch', '--target', String(targetArg), '--app', appTarget, '--restart'];
+    if (currentWorkspace) {
+        args.push('--workspace', currentWorkspace);
+    }
+    return args;
+}
+
 /**
  * 3-step survival failover:
  *   1) Hop to another account with remaining smart quota (>0%)
@@ -3133,29 +3257,8 @@ async function doAutoAccountHop(currentModel) {
         const plan = _getQuotaExhaustionPlan(currentModel);
         if (plan && plan.strategy === 'account_hop' && plan.account) {
             const targetArg = plan.account.id || plan.account.email;
-            const currentWorkspace = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0)
-                ? vscode.workspace.workspaceFolders[0].uri.fsPath
-                : '';
-            const wsArg = currentWorkspace ? ` "${currentWorkspace}"` : '';
-            const appName = (vscode.env && vscode.env.appName) ? String(vscode.env.appName) : '';
-            const appTarget = /visual studio code/i.test(appName) ? 'code' : 'ide';
-
-            // Snapshot active conversation
-            const activeConvoId = getActiveConversationId();
-            if (activeConvoId) {
-                try {
-                    if (!fs.existsSync(agToolsDir)) fs.mkdirSync(agToolsDir, { recursive: true });
-                    const restoreFile = path.join(agToolsDir, 'restore_conversation.json');
-                    fs.writeFileSync(restoreFile, JSON.stringify({
-                        cascadeId: activeConvoId,
-                        timestamp: Date.now(),
-                        resume_message: 'continue',
-                        resume_reason: '429_account_hop'
-                    }), 'utf8');
-                } catch (_) {}
-            }
-
-            await runAccountSwitcherAsync(`switch "${targetArg}" --app ${appTarget} --restart${wsArg}`);
+            _saveAutoResumeConversation(currentModel);
+            await runAccountSwitcherAsync(_buildSwitchRestartArgs(targetArg));
             vscode.window.showInformationMessage(
                 `✅ 429 Failover: переключено на аккаунт ${plan.account.name || plan.account.email} (${Math.round(plan.remainingPct)}% квоты).`
             );
@@ -3163,7 +3266,9 @@ async function doAutoAccountHop(currentModel) {
         }
         if (plan && plan.strategy === 'tier1_model') {
             if (plan.switchAccount && plan.account) {
-                await runAccountSwitcherAsync(['switch', '--id', plan.account.id, '--app', 'ide']);
+                const targetArg = plan.account.id || plan.account.email;
+                _saveAutoResumeConversation(plan.model || currentModel);
+                await runAccountSwitcherAsync(_buildSwitchRestartArgs(targetArg));
             }
             await vscode.workspace.getConfiguration('agToolkit').update(
                 'currentModel', plan.model, vscode.ConfigurationTarget.Global
@@ -3176,7 +3281,9 @@ async function doAutoAccountHop(currentModel) {
         }
         if (plan && plan.strategy === 'degraded_swarm') {
             if (plan.switchAccount && plan.account) {
-                await runAccountSwitcherAsync(['switch', '--id', plan.account.id, '--app', 'ide']);
+                const targetArg = plan.account.id || plan.account.email;
+                _saveAutoResumeConversation(plan.model || 'gemini-2.5-flash');
+                await runAccountSwitcherAsync(_buildSwitchRestartArgs(targetArg));
             }
             await doAutoModelFallback(plan.model || 'gemini-2.5-flash', true);
             return;
@@ -3193,7 +3300,9 @@ async function doAutoAccountHop(currentModel) {
             return;
         }
         const best = candidates[0];
-        await runAccountSwitcherAsync(['switch', '--id', best.id, '--app', 'ide']);
+        const targetArg = best.id || best.email;
+        _saveAutoResumeConversation(currentModel);
+        await runAccountSwitcherAsync(_buildSwitchRestartArgs(targetArg));
         vscode.window.showInformationMessage(
             `✅ 429 Failover: переключено на аккаунт ${best.name || best.email} (${Math.round(best.claude_percentage || best.gemini_percentage || 0)}% квоты).`
         );
@@ -3282,8 +3391,8 @@ async function show429PolicyMenu() {
             policy: 'interactive'
         },
         {
-            label: currentPolicy === 'account_hop' ? '$(check) Авто: держать умную (каскад + резерв Flash при 0%)' : 'Авто: держать умную (каскад + резерв Flash при 0%)',
-            description: 'Другой аккаунт → другая Tier-1 (Gemini Pro) → дежурный Flash по 1–2 файла, если 0% везде',
+            label: currentPolicy === 'account_hop' ? '$(check) Авто: смена аккаунта + то же окно + «continue»' : 'Авто: смена аккаунта + то же окно + «continue»',
+            description: 'При 429 на Claude: сменить аккаунт, открыть то же окно/модель и отправить continue (при 0% везде → Flash)',
             policy: 'account_hop'
         },
         {
@@ -5441,6 +5550,10 @@ module.exports = {
     // 429 Failover Engine & Error Guardian
     setup429LogWatchers,
     dispose429LogWatchers,
+    collect429CandidateFiles,
+    checkDirFor429,
+    tryRestorePreviousConversation,
+    doAutoAccountHop,
     setupIdeErrorGuardian,
     disposeIdeErrorGuardian,
     handleIdeGuardianAlert,

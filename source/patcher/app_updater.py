@@ -214,13 +214,38 @@ def _extract_version_from_ide_payload(payload: dict) -> str:
     return ""
 
 
+_PLACEHOLDER_UPDATE_HOSTS = {"example.com", "example.org", "example.net", "localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def _resolve_ide_update_base_url(product_info: dict) -> str:
+    """Resolve real Antigravity IDE update feed URL, ignoring placeholder/stub updateUrl values."""
+    import urllib.parse
+
+    raw = str((product_info or {}).get("updateUrl") or "").strip().rstrip("/")
+    if not raw:
+        return IDE_UPDATE_BASE_URL
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or not host
+            or host in _PLACEHOLDER_UPDATE_HOSTS
+            or host.endswith((".local", ".invalid", ".example", ".test"))
+        ):
+            return IDE_UPDATE_BASE_URL
+    except Exception:
+        return IDE_UPDATE_BASE_URL
+    return raw
+
+
 def check_ide_update(main_js_path: str = "", timeout: float = 4.0) -> dict:
     """Check official Antigravity IDE update feed."""
     prod = _get_ide_product_info(main_js_path)
     installed = get_installed_app_version("ide", main_js_path)
     commit = str(prod.get("commit") or "").strip()
     quality = str(prod.get("quality") or "stable").strip() or "stable"
-    base_url = str(prod.get("updateUrl") or IDE_UPDATE_BASE_URL).strip().rstrip("/")
+    base_url = _resolve_ide_update_base_url(prod)
 
     result = {
         "target": "ide",

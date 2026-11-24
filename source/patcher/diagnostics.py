@@ -2290,16 +2290,16 @@ def _heal_google_connectivity(
             # activate VPN-proof direct Hosts-Pinning.
             nrpt_bypassed_by_vpn = False
             if require_bypass and out["nrpt_active"] and not out["hosts_active"]:
-                try:
-                    _infos = socket.getaddrinfo("daily-cloudcode-pa.googleapis.com", 443, type=socket.SOCK_STREAM)
-                    _ips = [str(r[4][0]) for r in (_infos or []) if isinstance(r, (tuple, list)) and len(r) > 4]
-                    if _ips and all(
-                        ip.startswith(("172.217.", "142.250.", "108.177.", "74.125.", "216.58.", "64.233."))
-                        for ip in _ips
-                    ):
-                        nrpt_bypassed_by_vpn = True
-                except Exception:
-                    pass
+                _google_prefixes = ("172.217.", "142.250.", "108.177.", "74.125.", "216.58.", "64.233.")
+                for _dom in ("cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"):
+                    try:
+                        _infos = socket.getaddrinfo(_dom, 443, type=socket.SOCK_STREAM)
+                        _ips = [str(r[4][0]) for r in (_infos or []) if isinstance(r, (tuple, list)) and len(r) > 4]
+                        if _ips and all(ip.startswith(_google_prefixes) for ip in _ips):
+                            nrpt_bypassed_by_vpn = True
+                            break
+                    except Exception:
+                        pass
 
             if (
                 (not out["connectivity_ok"])

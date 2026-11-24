@@ -6276,3 +6276,183 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
             res = diagnostics.ensure_target_and_env_healthy(target="all", quiet=True)
         self.assertTrue(res["ok"])
         self.assertEqual(buf.getvalue(), "")
+
+    def test_ide_updater_placeholder_url_nrpt_partial_check_and_cli_active_no_sig_swallow(self):
+        from unittest import mock
+        from patcher import app_updater, auto_repatch, nrpt_dns
+        from patcher.ide import patcher as ide_patcher
+
+        # 1. check_ide_update ignores placeholder updateUrl like https://example.com
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            prod = td_p / "product.json"
+            prod.write_text(json.dumps({
+                "ideVersion": "2.8.0",
+                "commit": "abc123",
+                "quality": "stable",
+                "updateUrl": "https://example.com",
+            }), encoding="utf-8")
+            main_js = td_p / "out" / "main.js"
+            main_js.parent.mkdir(parents=True, exist_ok=True)
+            main_js.write_text("// main", encoding="utf-8")
+
+            seen_urls = []
+
+            def _fake_get(url, headers=None, timeout=4.0):
+                seen_urls.append(url)
+                return 200, json.dumps({
+                    "url": "https://edgedl.me.gvt1.com/edgedl/release2/antigravity/stable/2.9.0-deadbeef/Antigravity.exe",
+                    "sha256hash": "deadbeef",
+                    "version": "deadbeef",
+                })
+
+            with mock.patch.object(app_updater, "_http_get_text", side_effect=_fake_get):
+                res = app_updater.check_ide_update(str(main_js))
+            self.assertTrue(seen_urls and seen_urls[0].startswith(app_updater.IDE_UPDATE_BASE_URL))
+            self.assertTrue(res["update_available"])
+            self.assertEqual(res["latest_version"], "2.9.0")
+
+        # 2. check_dns_substitution_all flags partial resolvers (daily proxied, cloudcode-pa passthrough)
+        def _fake_udp(srv, dom, timeout=2.0):
+            if srv == "8.8.8.8":
+                return ["172.217.116.4"]
+            if dom == "daily-cloudcode-pa.googleapis.com":
+                return ["193.233.112.67"]
+            return ["172.217.116.4"]
+
+        with mock.patch("extensions.core.hosts_pin.resolve_domain_udp", side_effect=_fake_udp):
+            all_ok, subs, passes, _detail = nrpt_dns.check_dns_substitution_all("37.230.192.51")
+            self.assertFalse(all_ok)
+            self.assertEqual(subs, ["daily-cloudcode-pa.googleapis.com"])
+            self.assertEqual(passes, ["cloudcode-pa.googleapis.com"])
+
+        # 3. Dynamic openConversation injection on modern Antigravity IDE workbench
+        wb_sample = (
+            'var x=1;de(class extends xe{constructor(){super({id:"antigravity.startNewConversation",'
+            'title:"New Conversation",keybinding:{primary:3114,weight:300}})}async run(e){await e.get(Q4e).'
+            'triggerFocus({selectionSource:"auto",startNewConversation:!0,shouldCloseWhenFocused:!1})}}),'
+            'de(class extends xe{constructor(){super({id:"antigravity.sendPromptToAgentPanel",'
+            'title:"Send",f1:!1})}async run(t,e){t.get(bse).sendMessageToChatPanel?.(e)}});'
+        )
+        patched_wb, changed_wb = ide_patcher._inject_open_conversation_command(wb_sample)
+        self.assertTrue(changed_wb)
+        self.assertIn('id:"antigravity.openConversation"', patched_wb)
+        self.assertIn('t.get(bse).togglePanelTab?.("conversation",e)', patched_wb)
+
+        # 4. auto_watch.ps1 must NOT overwrite Save-WatchedSignature when Test-CliActive is true
+        import re
+        ps_txt = auto_repatch._build_ps_watcher_script(["python.exe", "main.py"])
+        m_cli = re.search(r"if\s*\(\s*Test-CliActive\s*\)\s*\{+([\s\S]*?)\}+", ps_txt)
+        self.assertIsNotNone(m_cli)
+        self.assertNotIn("Save-WatchedSignature", m_cli.group(1))
+        self.assertNotIn("$sig = $cur", m_cli.group(1))
+
+    def test_ide_ext_429_nested_logs_hop_and_auto_continue(self):
+        """extension.js: recursive 429 log watcher, --target/--workspace hop args, and auto-send continue."""
+        import subprocess
+        node_exe = shutil.which("node")
+        if not node_exe:
+            self.skipTest("node not available")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            td = Path(tmp)
+            ag_tools = td / ".antigravity_tools"
+            gemini_dir = td / ".gemini"
+            logs_root = td / "AppData" / "Antigravity IDE" / "logs"
+            sess_dir = logs_root / "20261124T120000" / "window1" / "exthost" / "output_logging"
+            sess_dir.mkdir(parents=True, exist_ok=True)
+            ag_tools.mkdir(parents=True, exist_ok=True)
+            (gemini_dir / "antigravity-ide" / "brain" / "conv-123" / ".system_generated" / "logs").mkdir(parents=True, exist_ok=True)
+            (gemini_dir / "antigravity-ide" / "brain" / "conv-123" / ".system_generated" / "logs" / "transcript.jsonl").write_text(
+                json.dumps({"cwd": r"D:\Project With Spaces"}) + "\n", encoding="utf-8"
+            )
+            ls_log = sess_dir / "1-Antigravity LS.log"
+            ls_log.write_text("startup ok\n", encoding="utf-8")
+
+            js_script = f"""
+                const assert = require('assert');
+                const fs = require('fs');
+                const path = require('path');
+                const Module = require('module');
+
+                process.env.AG_TOOLS_DIR = {json.dumps(str(ag_tools))};
+                process.env.AG_GEMINI_DIR = {json.dumps(str(gemini_dir))};
+                process.env.APPDATA = {json.dumps(str(td / "AppData"))};
+
+                const sentCommands = [];
+                const execFileCalls = [];
+                const shownMessages = [];
+
+                const vscodeMock = {{
+                    workspace: {{
+                        workspaceFolders: [{{ name: 'Proj', uri: {{ fsPath: 'D:\\\\Project With Spaces' }} }}],
+                        getConfiguration: () => ({{
+                            get: (k) => k === 'failoverPolicy' ? 'account_hop' : (k === 'currentModel' ? 'claude' : undefined),
+                            update: async () => {{}}
+                        }}),
+                        onDidChangeConfiguration: () => ({{ dispose: () => {{}} }}),
+                        saveAll: async () => true,
+                    }},
+                    window: {{
+                        state: {{ focused: true }},
+                        createStatusBarItem: () => ({{ show() {{}}, hide() {{}}, dispose() {{}} }}),
+                        createOutputChannel: () => ({{ appendLine() {{}}, show() {{}}, dispose() {{}} }}),
+                        onDidChangeWindowState: () => ({{ dispose: () => {{}} }}),
+                        showInformationMessage: async (msg, ...btns) => {{ shownMessages.push({{ msg, btns }}); return undefined; }},
+                        showWarningMessage: async (msg, ...btns) => {{ shownMessages.push({{ msg, btns }}); return undefined; }},
+                        showErrorMessage: async (msg) => {{ shownMessages.push({{ msg }}); return undefined; }},
+                    }},
+                    commands: {{
+                        registerCommand: () => ({{ dispose: () => {{}} }}),
+                        getCommands: async () => ['antigravity.openConversation', 'antigravity.sendPromptToAgentPanel'],
+                        executeCommand: async (cmd, arg) => {{ sentCommands.push({{ cmd, arg }}); return true; }}
+                    }},
+                    env: {{ appName: 'Antigravity IDE', clipboard: {{ writeText: async () => {{}} }} }},
+                    ConfigurationTarget: {{ Global: 1 }},
+                    StatusBarAlignment: {{ Right: 2 }}
+                }};
+
+                const origLoad = Module._load;
+                Module._load = function (request, parent, isMain) {{
+                    if (request === 'vscode') return vscodeMock;
+                    if (request === 'child_process') {{
+                        return {{
+                            exec: (cmd, _opts, cb) => cb && cb(null, '', ''),
+                            execFile: (bin, args, opts, cb) => {{
+                                if (typeof opts === 'function') cb = opts;
+                                execFileCalls.push({{ bin, args }});
+                                cb && cb(null, '{{"ok": true}}', '');
+                            }}
+                        }};
+                    }}
+                    return origLoad.call(this, request, parent, isMain);
+                }};
+
+                const ext = require({json.dumps(str(IDE_DIR / 'extension.js'))});
+
+                (async () => {{
+                    ext._resetStateForTests();
+                    // 1. Recursive 429 detection inside nested Antigravity IDE/logs/<session>/...
+                    assert.strictEqual(ext.checkDirFor429({json.dumps(str(logs_root))}), false);
+                    fs.appendFileSync({json.dumps(str(ls_log))}, 'E1124 12:00:05 errorreport.go:307] RESOURCE_EXHAUSTED (code 429): Individual quota reached\\n');
+                    assert.strictEqual(ext.checkDirFor429({json.dumps(str(logs_root))}), true);
+
+                    // 2. tryRestorePreviousConversation auto-sends 'continue' when auto_send_resume === true without blocking modal
+                    const restoreFile = path.join(process.env.AG_TOOLS_DIR, 'restore_conversation.json');
+                    fs.writeFileSync(restoreFile, JSON.stringify({{
+                        cascadeId: 'conv-123',
+                        timestamp: Date.now(),
+                        resume_message: 'continue',
+                        resume_reason: '429_account_hop',
+                        auto_send_resume: true,
+                        model: 'claude'
+                    }}));
+                    ext.tryRestorePreviousConversation();
+                    await new Promise((r) => setTimeout(r, 7100));
+                    assert.ok(sentCommands.some((c) => c.cmd === 'antigravity.openConversation' && c.arg === 'conv-123'));
+                    assert.ok(sentCommands.some((c) => c.cmd === 'antigravity.sendPromptToAgentPanel' && c.arg === 'continue'));
+                    assert.ok(!shownMessages.some((m) => Array.isArray(m.btns) && m.btns.includes('Да, продолжить')));
+                }})().then(() => process.exit(0)).catch((e) => {{ console.error(e); process.exit(1); }});
+            """
+            res = subprocess.run([node_exe, "-e", js_script], capture_output=True, text=True, timeout=20)
+            self.assertEqual(res.returncode, 0, f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")

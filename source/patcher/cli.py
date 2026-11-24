@@ -1311,14 +1311,38 @@ def run_cli():
                     print_menu_row("2", "Antigravity IDE updates", f"toggle lock ({ide_upd_hint or ide_st})", COLOR_GREEN)
                     print_menu_row("3", "Antigravity 2.0 updates", f"toggle lock ({mgr_upd_hint or mgr_st})", COLOR_GREEN)
                     print_menu_row("4", "Antigravity VS Code updates", f"toggle lock (currently {vsc_st})", COLOR_GREEN)
+                    print_menu_row("5", "Check & install available updates now", "download, close app, update, re-patch & relaunch", COLOR_CYAN)
                     print()
                     print_menu_row("0", "Back to main menu", "return to patcher menu", COLOR_RED)
-                    print_menu_footer("Unlocking checks for new versions, installs, re-patches & relaunches automatically.")
+                    print_menu_footer("Unlocking or option [5] checks, installs, re-patches & relaunches automatically.")
 
                     sub_choice = input(color("\n  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
                     if sub_choice in ("0", "", "q", "exit", "back"):
                         handled = False
                         break
+                    elif sub_choice == "5":
+                        print()
+                        if _HAVE_APP_UPDATER:
+                            invalidate_app_update_cache()
+                        did_any_upd = False
+                        if main_js_path and os.path.isfile(main_js_path):
+                            did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
+                            if did_i:
+                                did_any_upd = True
+                                _apply_patch_deploy_and_launch_for_target("ide", main_js_path, launch_after=True)
+                        if manager_path and os.path.isfile(manager_path):
+                            did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
+                            if did_m:
+                                did_any_upd = True
+                                _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
+                        if agy_path and os.path.isfile(agy_path):
+                            did_c, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
+                            if did_c:
+                                did_any_upd = True
+                                _apply_patch_deploy_and_launch_for_target("cli", agy_path, launch_after=False)
+                        if not did_any_upd:
+                            info("No newer IDE / 2.0 / CLI updates found right now.")
+                        pause()
                     elif sub_choice == "1":
                         print()
                         was_ide_locked = ide_is_locked

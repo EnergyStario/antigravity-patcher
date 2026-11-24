@@ -276,8 +276,40 @@ def disable_ide_telemetry() -> bool:
     return success
 
 
+def _inject_open_conversation_command(wb_content: str) -> tuple[str, bool]:
+    """Ensure antigravity.openConversation command is registered in workbench.desktop.main.js."""
+    if CONV_DONE in wb_content:
+        return wb_content, False
+    idx_svc = wb_content.find('id:"antigravity.sendPromptToAgentPanel"')
+    idx_cmd = wb_content.find('id:"antigravity.startNewConversation"')
+    if idx_svc == -1 or idx_cmd == -1:
+        return wb_content, False
+    svc_win = wb_content[idx_svc : idx_svc + 240]
+    cmd_win_start = max(0, idx_cmd - 80)
+    cmd_win = wb_content[cmd_win_start : idx_cmd + 320]
+    m_svc = re.search(
+        r'id:"antigravity\.sendPromptToAgentPanel"[\s\S]{0,160}?\.get\(([A-Za-z_$0-9]+)\)\.sendMessageToChatPanel',
+        svc_win,
+    )
+    m_cmd = re.search(
+        r'([A-Za-z_$0-9]+)\(class extends ([A-Za-z_$0-9]+)\{constructor\(\)\{super\(\{id:"antigravity\.startNewConversation"[\s\S]{0,280}?\}\)\}\}\),',
+        cmd_win,
+    )
+    if m_svc and m_cmd:
+        reg_fn, base_cls = m_cmd.group(1), m_cmd.group(2)
+        svc_tok = m_svc.group(1)
+        patch_snippet = (
+            f'{reg_fn}(class extends {base_cls}{{constructor(){{super({{id:"antigravity.openConversation",'
+            f'title:"Open Conversation",f1:!1}})}}async run(t,e){{t.get({svc_tok}).togglePanelTab?.("conversation",e)}}}}),'
+        )
+        anchor = m_cmd.group(0)
+        abs_start = cmd_win_start + m_cmd.start()
+        return wb_content[:abs_start] + anchor + patch_snippet + wb_content[abs_start + len(anchor) :], True
+    return wb_content, False
+
+
 def patch_workbench_js(main_js_path):
-    """Патчит workbench.desktop.main.js для отключения экрана JUd (Sorry, this account is ineligible)."""
+    """Патчит workbench.desktop.main.js для отключения экрана JUd (Sorry, this account is ineligible) и регистрации antigravity.openConversation."""
     wb_path = os.path.normpath(os.path.join(os.path.dirname(main_js_path), "vs", "workbench", "workbench.desktop.main.js"))
     if not os.path.isfile(wb_path):
         return False
@@ -302,6 +334,9 @@ def patch_workbench_js(main_js_path):
     if target3 in new_content:
         new_content = new_content.replace(target3, 'guard:({context:t})=>t.errorMessage!==""&&!1', 1)
         changed = True
+    new_content, conv_injected = _inject_open_conversation_command(new_content)
+    if conv_injected:
+        changed = True
 
     if changed:
         bak = wb_path + ".bak"
@@ -312,13 +347,16 @@ def patch_workbench_js(main_js_path):
                 pass
         try:
             write_atomic(wb_path, new_content, kill_on_lock=False)
-            step("workbench UI ineligibility screen bypassed", True, "JUd screen bypassed")
+            if conv_injected:
+                step("workbench openConversation command registered", True, "conversation restore enabled")
+            else:
+                step("workbench UI ineligibility screen bypassed", True, "JUd screen bypassed")
             return True
         except Exception as ex:
             warn(f"Could not patch workbench.desktop.main.js: {ex}")
             return False
-    elif 'case"loginError":case"signedIn":' in content:
-        step("workbench UI ineligibility screen", True, "already patched")
+    elif 'case"loginError":case"signedIn":' in content or CONV_DONE in content:
+        step("workbench UI patches", True, "already patched")
         return True
     return False
 

@@ -90,6 +90,21 @@
           "type": "number",
           "default": 15,
           "description": "Интервал обновления строки состояния (в секундах)."
+        },
+        "agToolkit.failoverPolicy": {
+          "type": "string",
+          "enum": [
+            "interactive",
+            "account_hop",
+            "model_fallback"
+          ],
+          "enumDescriptions": [
+            "Спрашивать каждый раз при исчерпании квоты (429)",
+            "Автоматически сменить аккаунт, открыть то же окно и отправить 'continue' на той же модели (а при 0% везде — Tier-1 / Flash)",
+            "Автоматически переключиться на быстрый Flash"
+          ],
+          "default": "interactive",
+          "description": "Режим работы при исчерпании квоты модели (429 / RESOURCE_EXHAUSTED)."
         }
       }
     }

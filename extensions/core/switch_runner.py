@@ -1142,6 +1142,30 @@ def ensure_workbench_patched(exe_path: str):
             log("workbench.desktop.main.js already has openConversation patch.")
             return
 
+        new_content = None
+        idx_svc = content.find('id:"antigravity.sendPromptToAgentPanel"')
+        idx_cmd = content.find('id:"antigravity.startNewConversation"')
+        m_svc = re.search(
+            r'id:"antigravity\.sendPromptToAgentPanel"[\s\S]{0,160}?\.get\(([A-Za-z_$0-9]+)\)\.sendMessageToChatPanel',
+            content[idx_svc : idx_svc + 240],
+        ) if idx_svc != -1 else None
+        cmd_win_start = max(0, idx_cmd - 80) if idx_cmd != -1 else 0
+        m_cmd = re.search(
+            r'([A-Za-z_$0-9]+)\(class extends ([A-Za-z_$0-9]+)\{constructor\(\)\{super\(\{id:"antigravity\.startNewConversation"[\s\S]{0,280}?\}\)\}\}\),',
+            content[cmd_win_start : idx_cmd + 320],
+        ) if idx_cmd != -1 else None
+        if m_svc and m_cmd:
+            reg_fn, base_cls, svc_tok = m_cmd.group(1), m_cmd.group(2), m_svc.group(1)
+            dyn_patch = (
+                f'{reg_fn}(class extends {base_cls}{{constructor(){{super({{id:"antigravity.openConversation",'
+                f'title:"Open Conversation",f1:!1}})}}async run(t,e){{t.get({svc_tok}).togglePanelTab?.("conversation",e)}}}}),'
+            )
+            anchor_dyn = m_cmd.group(0)
+            abs_start = cmd_win_start + m_cmd.start()
+            new_content = content[:abs_start] + anchor_dyn + dyn_patch + content[abs_start + len(anchor_dyn) :]
+            wb.write_text(new_content, encoding="utf-8")
+            log("ensure_workbench_patched: successfully patched workbench.desktop.main.js (dynamic anchor)!")
+
         # Modern Antigravity IDE (anchor right after startNewConversation)
         anchor1 = 'de(class extends xe{constructor(){super({id:"antigravity.startNewConversation",title:"New Conversation",keybinding:{primary:3114,weight:300}})}async run(e){await e.get(Q4e).triggerFocus({selectionSource:"auto",startNewConversation:!0,shouldCloseWhenFocused:!1})}}),'
         patch1 = 'de(class extends xe{constructor(){super({id:"antigravity.openConversation",title:"Open Conversation",f1:!1})}async run(t,e){t.get(bse).togglePanelTab?.("conversation",e)}}),'
@@ -1150,7 +1174,9 @@ def ensure_workbench_patched(exe_path: str):
         anchor2 = 'async run(t){t.get(AJ).togglePanelTab?.("customization")}});'
         patch2 = 've(class extends ke{constructor(){super({id:"antigravity.openConversation",title:"Open Conversation",f1:!1})}async run(t,e){t.get(AJ).togglePanelTab?.("conversation",e)}});'
 
-        if anchor1 in content:
+        if new_content is not None:
+            pass
+        elif anchor1 in content:
             new_content = content.replace(anchor1, anchor1 + patch1, 1)
             wb.write_text(new_content, encoding="utf-8")
             log("ensure_workbench_patched: successfully patched workbench.desktop.main.js (modern anchor)!")

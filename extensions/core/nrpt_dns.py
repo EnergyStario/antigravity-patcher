@@ -132,6 +132,17 @@ def check_dns_resolver_reachable(ip: str, timeout: float = 2.0) -> tuple[bool, s
         sock.close()
 
 
+CRITICAL_NRPT_DOMAINS = (
+    "cloudcode-pa.googleapis.com",
+    "daily-cloudcode-pa.googleapis.com",
+)
+_STANDARD_GOOGLE_PREFIXES = ("172.217.", "142.250.", "108.177.", "74.125.", "216.58.", "64.233.")
+
+
+def _filter_valid_dns_ips(ips: list[str]) -> set[str]:
+    return {ip for ip in ips if ip and not ip.startswith(("127.", "0.", "255."))}
+
+
 def check_dns_substitution(
     resolver_ip: str,
     domain: str = "daily-cloudcode-pa.googleapis.com",
@@ -150,16 +161,36 @@ def check_dns_substitution(
         except ImportError:
             return True, "Substitution verification skipped (hosts_pin unavailable)"
 
-    ref_ips = set(resolve_domain_udp(ref_ip, domain, timeout=timeout))
-    res_ips = set(resolve_domain_udp(resolver_ip, domain, timeout=timeout))
+    ref_ips = _filter_valid_dns_ips(resolve_domain_udp(ref_ip, domain, timeout=timeout))
+    res_ips = _filter_valid_dns_ips(resolve_domain_udp(resolver_ip, domain, timeout=timeout))
     if not res_ips:
         return False, "No response or empty answer"
-    res_ips = {ip for ip in res_ips if not ip.startswith(("127.", "0.", "255."))}
-    if not res_ips:
-        return False, "Resolver returned loopback/bogon addresses"
+    if all(ip.startswith(_STANDARD_GOOGLE_PREFIXES) for ip in res_ips):
+        if ref_ips and res_ips != ref_ips:
+            return False, f"Passthrough Google IP (no proxy): {', '.join(sorted(res_ips))}"
     if res_ips != ref_ips:
         return True, f"Substituted: {', '.join(sorted(res_ips))}"
     return False, f"Passthrough (same as reference {ref_ip}): {', '.join(sorted(res_ips))}"
+
+
+def check_dns_substitution_all(
+    resolver_ip: str,
+    domains: tuple[str, ...] | list[str] = CRITICAL_NRPT_DOMAINS,
+    ref_ip: str = "8.8.8.8",
+    timeout: float = 2.0,
+) -> tuple[bool, list[str], list[str], str]:
+    """Check DNS substitution across all critical Antigravity API domains."""
+    substituted: list[str] = []
+    passthrough: list[str] = []
+    details: list[str] = []
+    for dom in domains:
+        ok_sub, msg = check_dns_substitution(resolver_ip, domain=dom, ref_ip=ref_ip, timeout=timeout)
+        if ok_sub:
+            substituted.append(dom)
+        else:
+            passthrough.append(dom)
+        details.append(f"{dom}: {msg}")
+    return len(passthrough) == 0, substituted, passthrough, "; ".join(details)
 
 
 def _resolve_dns_target_ip(raw_target: str) -> tuple[str | None, str | None]:
@@ -314,6 +345,7 @@ def enable_nrpt_rule(
         else:
             return False, err_msg or "Invalid DNS IP."
 
+    sub_note = ""
     if check_live:
         orig_ip = resolved_ip
         is_live, probe_err = check_dns_resolver_reachable(resolved_ip, timeout=2.0)
@@ -321,6 +353,7 @@ def enable_nrpt_rule(
             # Automatically fail over across known reachable public unblock servers,
             # preferring resolvers that actively substitute Cloud Code endpoints.
             first_reachable = None
+            partial_match = None
             for srv in PUBLIC_UNBLOCK_SERVERS:
                 cand_ip = srv["ip"]
                 if cand_ip == resolved_ip:
@@ -330,19 +363,48 @@ def enable_nrpt_rule(
                     continue
                 if first_reachable is None:
                     first_reachable = (cand_ip, srv["name"])
-                ok_sub, _ = check_dns_substitution(cand_ip, timeout=1.5)
-                if ok_sub:
+                all_sub, sub_doms, _pass_doms, _ = check_dns_substitution_all(cand_ip, timeout=1.5)
+                if all_sub:
                     resolved_ip = cand_ip
                     raw_target = cand_ip
                     server_name = srv["name"]
                     is_live = True
                     break
-            if not is_live and first_reachable is not None:
+                if sub_doms and partial_match is None:
+                    partial_match = (cand_ip, srv["name"])
+            if not is_live and partial_match is not None:
+                resolved_ip, server_name = partial_match
+                raw_target = resolved_ip
+                is_live = True
+            elif not is_live and first_reachable is not None:
                 resolved_ip, server_name = first_reachable
                 raw_target = resolved_ip
                 is_live = True
         if not is_live:
             return False, f"DNS server {orig_ip} is unreachable ({probe_err}). NRPT rule was NOT applied to protect your network."
+        if not is_private_req:
+            all_sub, sub_doms, pass_doms, _ = check_dns_substitution_all(resolved_ip, timeout=1.5)
+            if pass_doms:
+                if not sub_doms:
+                    # Try finding a better public resolver if the chosen one passes everything through
+                    for srv in PUBLIC_UNBLOCK_SERVERS:
+                        cand_ip = srv["ip"]
+                        if cand_ip == resolved_ip:
+                            continue
+                        ok_cand, _ = check_dns_resolver_reachable(cand_ip, timeout=1.5)
+                        if not ok_cand:
+                            continue
+                        c_all, c_subs, c_pass, _ = check_dns_substitution_all(cand_ip, timeout=1.5)
+                        if c_all or len(c_subs) > len(sub_doms):
+                            resolved_ip = cand_ip
+                            raw_target = cand_ip
+                            server_name = srv["name"]
+                            pass_doms = c_pass
+                            sub_doms = c_subs
+                            if c_all:
+                                break
+                if pass_doms:
+                    sub_note = f" [partial: no proxy for {', '.join(pass_doms)} — enable Hosts-Pinning for full bypass]"
 
     public_match = next((s for s in PUBLIC_UNBLOCK_SERVERS if s["ip"] == resolved_ip), None)
     effective_mode = mode or ("private" if is_private_req else ("public" if public_match else "private"))
@@ -372,7 +434,7 @@ def enable_nrpt_rule(
             cfg["custom_ip"] = raw_target
         save_dns_config(cfg)
         suffix = f" ({raw_target} -> {resolved_ip})" if raw_target != resolved_ip else f" ({resolved_ip})"
-        return True, f"Selective DNS routing activated via{suffix}"
+        return True, f"Selective DNS routing activated via{suffix}{sub_note}"
     else:
         return False, f"PowerShell NRPT Error (requires Administrator rights): {out}"
 

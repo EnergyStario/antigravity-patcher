@@ -939,8 +939,7 @@ try {{
         }}
         if ($cur -ne $sig) {{
             if (Test-CliActive) {{
-                $sig = $cur
-                Save-WatchedSignature $sig
+                # Defer without overwriting $sig so pending updates still re-patch once Patcher UI exits
                 continue
             }}
             $now = Get-Date
