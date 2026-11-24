@@ -6456,3 +6456,72 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
             """
             res = subprocess.run([node_exe, "-e", js_script], capture_output=True, text=True, timeout=20)
             self.assertEqual(res.returncode, 0, f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+
+    def test_cli_uniform_back_eof_safety_and_no_cancel_pause(self):
+        """CLI submenus accept Enter/b/0/EOF cleanly, never force pause() on cancel, and match EnergyStario repo."""
+        from patcher import cli, constants, data_reset
+        from patcher.conversations import rebuilder
+
+        self.assertEqual(constants.GITHUB_REPO, "EnergyStario/antigravity-patcher")
+        self.assertEqual(constants.GITHUB_URL, "https://github.com/EnergyStario/antigravity-patcher")
+
+        # 1. Option 10 submenu exits on 'b', '' (Enter), and EOFError without calling pause()
+        for back_seq in (["10", "b", "0"], ["10", "", "0"]):
+            seq = iter(back_seq)
+            with mock.patch.object(sys, "argv", ["cli.py"]), mock.patch.object(
+                cli, "find_install_root", return_value=""
+            ), mock.patch.object(cli, "find_manager_binary", return_value=""), mock.patch.object(
+                cli, "find_agy_binary", return_value=""
+            ), mock.patch.object(cli, "find_extension_js", return_value=""), mock.patch.object(
+                cli, "find_gemini_antigravity_binary", return_value=""
+            ), mock.patch.object(cli, "redraw_main_screen"), mock.patch.object(
+                cli, "clear_screen"
+            ), mock.patch.object(cli, "print_banner"), mock.patch.object(
+                cli, "pause"
+            ) as pause_mock, mock.patch(
+                "patcher.auto_repatch.sync_auto_repatch_state"
+            ), mock.patch(
+                "builtins.input", side_effect=lambda *_a, **_kw: next(seq)
+            ):
+                cli.run_cli()
+            pause_mock.assert_not_called()
+
+        # 2. EOFError at main menu exits cleanly without exception
+        with mock.patch.object(sys, "argv", ["cli.py"]), mock.patch.object(
+            cli, "find_install_root", return_value=""
+        ), mock.patch.object(cli, "find_manager_binary", return_value=""), mock.patch.object(
+            cli, "find_agy_binary", return_value=""
+        ), mock.patch.object(cli, "find_extension_js", return_value=""), mock.patch.object(
+            cli, "find_gemini_antigravity_binary", return_value=""
+        ), mock.patch.object(cli, "redraw_main_screen"), mock.patch(
+            "patcher.auto_repatch.sync_auto_repatch_state"
+        ), mock.patch(
+            "builtins.input", side_effect=EOFError()
+        ):
+            cli.run_cli()
+
+        # 3. Cancelling [20] run_rebuild_wizard() skips extra pause()
+        seq20 = iter(["20", "0"])
+        with mock.patch.object(sys, "argv", ["cli.py"]), mock.patch.object(
+            cli, "find_install_root", return_value=""
+        ), mock.patch.object(cli, "find_manager_binary", return_value=""), mock.patch.object(
+            cli, "find_agy_binary", return_value=""
+        ), mock.patch.object(cli, "find_extension_js", return_value=""), mock.patch.object(
+            cli, "find_gemini_antigravity_binary", return_value=""
+        ), mock.patch.object(cli, "redraw_main_screen"), mock.patch.object(
+            cli, "clear_screen"
+        ), mock.patch.object(cli, "print_banner"), mock.patch.object(
+            cli, "pause"
+        ) as pause_20, mock.patch.object(
+            rebuilder, "run_rebuild_wizard", return_value=False
+        ), mock.patch(
+            "patcher.auto_repatch.sync_auto_repatch_state"
+        ), mock.patch(
+            "builtins.input", side_effect=lambda *_a, **_kw: next(seq20)
+        ):
+            cli.run_cli()
+        pause_20.assert_not_called()
+
+        # 4. data_reset handles EOFError gracefully
+        with mock.patch("builtins.input", side_effect=EOFError()):
+            self.assertEqual(data_reset._choose_app([("A", Path("a")), ("B", Path("b"))], None), (None, None))

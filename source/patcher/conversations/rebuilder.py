@@ -1097,7 +1097,10 @@ def run_rebuild_wizard() -> bool:
         print()
         hint("If Antigravity is open, it may overwrite the index when closing.")
         print()
-        yn = input(color("  Proceed anyway? (y/n) > ", COLOR_YELLOW, COLOR_BOLD)).strip().lower()
+        try:
+            yn = input(color("  Proceed anyway? (y/n) > ", COLOR_YELLOW, COLOR_BOLD)).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            yn = "n"
         if yn not in ("y", "yes", "д", "да"):
             cancel("Operation cancelled.")
             return False
@@ -1106,12 +1109,12 @@ def run_rebuild_wizard() -> bool:
     if not dbs:
         err("No Antigravity state.vscdb databases found.")
         hint(r"Expected at: %APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb")
-        return False
+        return None
 
     catalog = collect_all_conversations()
     if not catalog:
         warn("No conversation records found on disk (~/.gemini/antigravity/conversations).")
-        return False
+        return None
 
     step("Discovered databases", True, f"{len(dbs)} instance(s) found")
     step("Discovered conversations", True, f"{len(catalog)} conversation(s) located on disk")
@@ -1125,11 +1128,14 @@ def run_rebuild_wizard() -> bool:
     print_menu_row("1", "Auto-rebuild and re-order all conversations (Recommended)", "auto-detect titles & workspaces", COLOR_GREEN)
     if backups:
         print_menu_row("2", "Rollback to previous index backup", f"restore from {backups[0][0]}", COLOR_YELLOW)
-    print_menu_row("0", "Cancel", "return to menu", COLOR_RED)
+    print_menu_row("0", "Back / Cancel", "Enter / 0 / b — return to main menu", COLOR_RED)
     print()
 
-    choice = input(color("  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-    if choice in ("0", "", "b", "back", "q", "quit", "exit"):
+    try:
+        choice = input(color("  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = "0"
+    if choice.lstrip("\x1b") in ("0", "", "b", "back", "q", "quit", "exit", "назад"):
         cancel("Cancelled.")
         return False
 

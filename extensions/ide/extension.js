@@ -223,29 +223,34 @@ function activate(context) {
             updateStatusBar();
         }
     }, Math.max(10, intervalSec) * 1000);
+    if (typeof checkTimer.unref === 'function') checkTimer.unref();
 
     // Automatic non-intrusive cloud update check on startup
     checkForUpdatesOnStartup();
 
     // Background quota refreshes using pure-Node Keep-Alive engine with cross-process cooldown
-    setTimeout(() => {
+    const _tActiveQ = setTimeout(() => {
         refreshActiveQuotaBackground({ minAgeSec: 12, ignoreFocus: true });
     }, 600);
-    setTimeout(() => {
+    if (typeof _tActiveQ.unref === 'function') _tActiveQ.unref();
+    const _tAllQ = setTimeout(() => {
         refreshQuotasBackground({ minAgeSec: 90, ignoreFocus: true });
     }, 2500);
+    if (typeof _tAllQ.unref === 'function') _tAllQ.unref();
 
     activeQuotaTimer = setInterval(() => {
         if (isWindowFocused()) {
             refreshActiveQuotaBackground({ minAgeSec: 12 });
         }
     }, 15 * 1000);
+    if (typeof activeQuotaTimer.unref === 'function') activeQuotaTimer.unref();
 
     quotaTimer = setInterval(() => {
         if (isWindowFocused()) {
             refreshQuotasBackground({ minAgeSec: 180 });
         }
     }, 180 * 1000);
+    if (typeof quotaTimer.unref === 'function') quotaTimer.unref();
 
     setupFileWatchers();
 

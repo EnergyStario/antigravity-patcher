@@ -188,6 +188,13 @@ def _dir_size_str(path: Path) -> str:
         return "unknown size"
 
 
+def _safe_input(prompt: str, default: str = "") -> str:
+    try:
+        return input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
 def _choose_app(available: List[Tuple[str, Path]],
                 preferred_name: Optional[str]) -> Tuple[Optional[str], Optional[Path]]:
     if len(available) == 1:
@@ -199,11 +206,11 @@ def _choose_app(available: List[Tuple[str, Path]],
     print(color("  Select application to reset:", COLOR_WHITE, COLOR_BOLD))
     for i, (n, p) in enumerate(available, 1):
         print_menu_row(str(i), n, _dir_size_str(p), COLOR_CYAN)
-    print_menu_row("0", "Cancel", "", COLOR_DIM)
-    print_menu_footer()
+    print_menu_row("0", "Back / Cancel", "Enter / 0 / b", COLOR_DIM)
+    print_menu_footer("0 / Enter / b — Back to main menu")
     print()
-    sel = input(color("  Select > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-    if sel in ("0", "", "b", "q", "quit", "exit", "back"):
+    sel = _safe_input(color("  Select > ", COLOR_CYAN, COLOR_BOLD), default="0")
+    if sel.lstrip("\x1b") in ("0", "", "b", "q", "quit", "exit", "back", "\u043d\u0430\u0437\u0430\u0434"):
         return None, None
     try:
         idx = int(sel) - 1
@@ -402,8 +409,8 @@ def _reset_single_target(
         else:
             warn(f"You should close {target_name} before cleaning caches.")
             print()
-            choice = input(color(f"  Kill '{running}' now? [y/N] > ", COLOR_YELLOW)).strip().lower()
-            if choice == "y":
+            choice = _safe_input(color(f"  Kill '{running}' now? [y/N] > ", COLOR_YELLOW), default="n")
+            if choice in ("y", "yes", "д", "да"):
                 if _kill_ide(running):
                     ok(f"Process '{running}' terminated.")
                     import time
@@ -420,8 +427,8 @@ def _reset_single_target(
         info("This will clean ONLY temporary caches (CachedData, Code Cache, GPUCache)")
         info("and broken AppCompatFlags/IFEO registry entries. settings.json & chats stay intact.")
         print()
-        confirm = input(color(f"  Confirm safe cleanup for '{target_name}'? [y/N] > ", COLOR_YELLOW, COLOR_BOLD)).strip().lower()
-        if confirm != "y":
+        confirm = _safe_input(color(f"  Confirm safe cleanup for '{target_name}'? [y/N] > ", COLOR_YELLOW, COLOR_BOLD), default="n")
+        if confirm not in ("y", "yes", "д", "да"):
             cancel("Cancelled -- no changes made.")
             return False
 

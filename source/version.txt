@@ -18,7 +18,7 @@ VSVersionInfo(
            StringStruct('FileVersion', '1.2.0'),
           StringStruct('InternalName', 'antigravity_patcher'),
           StringStruct('LegalCopyright', '© 2026 energystar'),
-          StringStruct('OriginalFilename', 'Antigravity_Patcher_Windows.exe'),
+          StringStruct('OriginalFilename', 'Antigravity_Patcher_Windows_x64.exe'),
           StringStruct('ProductName', 'Antigravity Patcher'),
            StringStruct('ProductVersion', '1.2.0')])
       ]),

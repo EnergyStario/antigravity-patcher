@@ -214,10 +214,37 @@ def _read_console_line(prompt):
     return raw.decode("utf-8", errors="replace").rstrip("\r\n")
 
 
+_BACK_CHOICES = {"0", "", "b", "back", "q", "quit", "exit", "\x1b", "назад"}
+
+
+def _read_menu_input(prompt="\n  Select option > ", default_on_eof="0"):
+    try:
+        raw = input(color(prompt, COLOR_CYAN, COLOR_BOLD))
+    except (EOFError, KeyboardInterrupt):
+        return default_on_eof
+    cleaned = str(raw).strip().lower()
+    if cleaned.startswith("\x1b"):
+        cleaned = cleaned.lstrip("\x1b") or "0"
+    return cleaned
+
+
+def _read_path_input(prompt):
+    try:
+        raw = input(color(prompt, COLOR_CYAN, COLOR_BOLD)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    if not raw or raw.startswith("\x1b"):
+        return ""
+    return raw
+
+
 def prompt_yn(question):
     question = question.rstrip()
     prompt = f"  [?] {question} ({color('y', COLOR_GREEN)}/{color('n', COLOR_RED)}): "
-    return _read_console_line(prompt).strip().lower()
+    try:
+        return _read_console_line(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "n"
 
 
 def confirmed(question):
@@ -232,11 +259,11 @@ def offer_download_and_block(software_name="Antigravity", target_type=None):
     print()
     print_menu_row("1", "Open download page in browser", DOWNLOAD_URL, COLOR_GREEN)
     print_menu_row("2", f"Specify path to installed {software_name}", "manual path selection", COLOR_CYAN)
-    print_menu_row("0", "Return to main menu", "", COLOR_RED)
+    print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
     print()
 
-    action = input(color("  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-    if action in ("0", "", "b", "back", "q", "exit", "quit"):
+    action = _read_menu_input("  Select option > ")
+    if action in _BACK_CHOICES:
         global _last_offer_cancelled
         _last_offer_cancelled = True
         cancel("Cancelled.")
@@ -247,10 +274,10 @@ def offer_download_and_block(software_name="Antigravity", target_type=None):
         return None
     elif action == "2":
         print()
-        hint(f"Enter the path to {software_name} (or 0 / Enter to cancel).")
+        hint(f"Enter the path to {software_name} (or 0 / Enter / b to cancel).")
         print_path_examples()
-        raw = input(color(f"\n  {software_name} Path > ", COLOR_CYAN, COLOR_BOLD)).strip()
-        if not raw or raw.lower() in ("0", "q", "exit", "back"):
+        raw = _read_path_input(f"\n  {software_name} Path > ")
+        if not raw or raw.lower() in _BACK_CHOICES:
             cancel("Cancelled.")
             return None
         if raw:
@@ -844,18 +871,6 @@ def run_cli():
     except Exception:
         pass
 
-    try:
-        import threading
-        from patcher.auto_repatch import sync_auto_repatch_state
-        _sync_fn = sync_auto_repatch_state
-        threading.Thread(
-            target=lambda: _sync_fn(main_js_path, manager_path, agy_path),
-            name="ag-watcher-sync",
-            daemon=True,
-        ).start()
-    except Exception:
-        pass
-
     if _HAVE_APP_UPDATER:
         try:
             start_background_update_checks(
@@ -871,7 +886,9 @@ def run_cli():
         except Exception:
             pass
 
-    # Full Autopilot on startup: if any installed target needs patching or environment healing, fix silently now
+    # Full Autopilot on startup: patch missing targets synchronously, and run network/DNS/watcher healing
+    # asynchronously in a daemon thread so the CMD menu opens instantaneously without freezing.
+    _run_bg_watcher_sync = True
     if any([main_js_path, manager_path, agy_path, vscode_path, vscode_agy_path]) and os.environ.get("AG_DISABLE_STARTUP_AUTOPILOT") != "1":
         try:
             from patcher.auto_repatch import inspect_targets, run_auto_repatch
@@ -894,19 +911,44 @@ def run_cli():
                 )
                 invalidate_menu_status_cache()
                 _TARGET_STATUS_CACHE.clear()
+                _run_bg_watcher_sync = False
             else:
-                # Even when binaries are already patched, verify & heal proxy / NRPT DNS / TLS / locks
-                _hl = ensure_target_and_env_healthy(
-                    target="all",
-                    quiet=True,
-                    main_js_path=main_js_path,
-                    manager_path=manager_path,
-                    agy_path=agy_path,
-                ) or {}
-                if _hl.get("proxy_healed") or _hl.get("tls_healed") or _hl.get("nrpt_auto_enabled"):
-                    ok("Автопилот: сетевое окружение (прокси / TLS / NRPT DNS) автоматически восстановлено.")
-                    invalidate_menu_status_cache()
-                    _TARGET_STATUS_CACHE.clear()
+                _run_bg_watcher_sync = False
+                import threading
+
+                def _bg_env_heal():
+                    try:
+                        _hl = ensure_target_and_env_healthy(
+                            target="all",
+                            quiet=True,
+                            main_js_path=main_js_path,
+                            manager_path=manager_path,
+                            agy_path=agy_path,
+                        ) or {}
+                        if _hl.get("changed") or _hl.get("proxy_healed") or _hl.get("tls_healed") or _hl.get("nrpt_auto_enabled") or _hl.get("hosts_auto_enabled"):
+                            invalidate_menu_status_cache()
+                            _TARGET_STATUS_CACHE.clear()
+                    except Exception:
+                        pass
+
+                threading.Thread(
+                    target=_bg_env_heal,
+                    name="ag-env-heal",
+                    daemon=True,
+                ).start()
+        except Exception:
+            pass
+
+    if _run_bg_watcher_sync:
+        try:
+            import threading
+            from patcher.auto_repatch import sync_auto_repatch_state
+            _sync_fn = sync_auto_repatch_state
+            threading.Thread(
+                target=lambda: _sync_fn(main_js_path, manager_path, agy_path),
+                name="ag-watcher-sync",
+                daemon=True,
+            ).start()
         except Exception:
             pass
 
@@ -969,33 +1011,33 @@ def run_cli():
         print_menu_row("20", "Rebuild & repair chat history", "restore missing/ordered conversations", COLOR_CYAN)
 
         print()
-        print_menu_row("0", "Exit", "quit the patcher", COLOR_RED)
-        print_menu_footer("Tip: patches are reversible — use RESTORE any time.")
-
-        choice = input(color("\n  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-        print()
-
-        if choice in ("0", "q", "quit", "exit"):
-            return
-
-        # Пустой ввод или команда "back" в главном меню — не выходим, просто перерисовываем меню
-        if choice in ("", "back", "b"):
-            redraw_main_screen(main_js_path, manager_path, agy_path, vscode_path,
-                               vscode_agy_path, show_search_line=False)
-            continue
+        print_menu_row("0", "Exit", "quit the patcher (0 / q / Esc)", COLOR_RED)
+        print_menu_footer("Enter — refresh  |  0 / q / Esc — exit  |  In submenus: Enter / 0 / b — back.")
 
         valid_choices = {str(i) for i in range(1, 21)}
-        if choice not in valid_choices:
-            err("Invalid choice")
-            print()
-            pause()
+        choice = None
+        while True:
+            raw_choice = _read_menu_input("\n  Select option > ", default_on_eof="0")
+            if raw_choice in ("0", "q", "quit", "exit"):
+                return
+            if raw_choice in ("", "back", "b", "назад"):
+                choice = ""
+                break
+            if raw_choice in valid_choices:
+                choice = raw_choice
+                break
+            err(f"Unknown option '{raw_choice}' — enter 1-20, Enter to refresh, or 0/q to exit.")
+
+        print()
+        if choice == "":
             redraw_main_screen(main_js_path, manager_path, agy_path, vscode_path,
                                vscode_agy_path, show_search_line=False)
             continue
 
         handled = True
-        clear_screen()
-        print_banner()
+        if choice not in ("10", "16", "17"):
+            clear_screen()
+            print_banner()
 
         if choice == "1":
             handled = True
@@ -1123,6 +1165,8 @@ def run_cli():
                         _run_env_heal(target="ide", quiet=False, main_js_path=main_js_path)
                         launch_application("ide", main_js_path)
                         ensure_agy_backend_patched(wait_seconds=3.0)
+                    else:
+                        handled = False
             except Exception as exc:
                 import traceback
                 err(f"Unexpected error patching Antigravity IDE: {exc}")
@@ -1151,6 +1195,8 @@ def run_cli():
                             deploy_antigravity_2_ui()
                             _run_env_heal(target="manager", quiet=False, manager_path=manager_path)
                             launch_application("manager", manager_path)
+                    else:
+                        handled = False
             except Exception as exc:
                 import traceback
                 err(f"Unexpected error patching Antigravity 2.0: {exc}")
@@ -1171,6 +1217,8 @@ def run_cli():
                         _, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
                         do_patch_agy(agy_path)
                         _run_env_heal(target="cli", quiet=False, agy_path=agy_path)
+                    else:
+                        handled = False
             except Exception as exc:
                 import traceback
                 err(f"Unexpected error patching Antigravity CLI: {exc}")
@@ -1313,11 +1361,20 @@ def run_cli():
                     print_menu_row("4", "Antigravity VS Code updates", f"toggle lock (currently {vsc_st})", COLOR_GREEN)
                     print_menu_row("5", "Check & install available updates now", "download, close app, update, re-patch & relaunch", COLOR_CYAN)
                     print()
-                    print_menu_row("0", "Back to main menu", "return to patcher menu", COLOR_RED)
-                    print_menu_footer("Unlocking or option [5] checks, installs, re-patches & relaunches automatically.")
+                    print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
+                    print_menu_footer("0 / Enter / b — Back  |  [5] forces immediate update check & install.")
 
-                    sub_choice = input(color("\n  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-                    if sub_choice in ("0", "", "q", "exit", "back"):
+                    sub_choice = None
+                    while True:
+                        raw_sub = _read_menu_input("\n  Select option > ")
+                        if raw_sub in _BACK_CHOICES:
+                            sub_choice = "0"
+                            break
+                        if raw_sub in ("1", "2", "3", "4", "5"):
+                            sub_choice = raw_sub
+                            break
+                        err(f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.")
+                    if sub_choice == "0":
                         handled = False
                         break
                     elif sub_choice == "5":
@@ -1342,7 +1399,7 @@ def run_cli():
                                 _apply_patch_deploy_and_launch_for_target("cli", agy_path, launch_after=False)
                         if not did_any_upd:
                             info("No newer IDE / 2.0 / CLI updates found right now.")
-                        pause()
+                        pause("  Press Enter (or any key) to continue...")
                     elif sub_choice == "1":
                         print()
                         was_ide_locked = ide_is_locked
@@ -1351,65 +1408,42 @@ def run_cli():
                         invalidate_menu_status_cache("update_locked")
                         now_ide_unlocked = not is_ide_locked(_ide_root_dir or None)
                         now_mgr_unlocked = not is_manager_locked()
-                        did_any_upd = False
                         if was_ide_locked and now_ide_unlocked and main_js_path and os.path.isfile(main_js_path):
                             did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
                             if did_i:
-                                did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("ide", main_js_path, launch_after=True)
                         if was_mgr_locked and now_mgr_unlocked and manager_path and os.path.isfile(manager_path):
                             did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
                             if did_m:
-                                did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
-                        if did_any_upd:
-                            pause()
-                        else:
-                            import time
-                            time.sleep(0.9)
+                        pause("  Press Enter (or any key) to continue...")
                     elif sub_choice == "2":
                         print()
                         was_ide_locked = ide_is_locked
                         toggle_ide_updates(_ide_root_dir or None)
                         invalidate_menu_status_cache("update_locked")
                         now_ide_unlocked = not is_ide_locked(_ide_root_dir or None)
-                        did_i = False
                         if was_ide_locked and now_ide_unlocked and main_js_path and os.path.isfile(main_js_path):
                             did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
                             if did_i:
                                 _apply_patch_deploy_and_launch_for_target("ide", main_js_path, launch_after=True)
-                        if did_i:
-                            pause()
-                        else:
-                            import time
-                            time.sleep(0.9)
+                        pause("  Press Enter (or any key) to continue...")
                     elif sub_choice == "3":
                         print()
                         was_mgr_locked = mgr_is_locked
                         toggle_manager_updates()
                         invalidate_menu_status_cache("update_locked")
                         now_mgr_unlocked = not is_manager_locked()
-                        did_m = False
                         if was_mgr_locked and now_mgr_unlocked and manager_path and os.path.isfile(manager_path):
                             did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
                             if did_m:
                                 _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
-                        if did_m:
-                            pause()
-                        else:
-                            import time
-                            time.sleep(0.9)
+                        pause("  Press Enter (or any key) to continue...")
                     elif sub_choice == "4":
                         print()
                         toggle_vscode_updates()
                         invalidate_menu_status_cache("update_locked")
-                        import time
-                        time.sleep(0.9)
-                    else:
-                        print()
-                        err("Invalid choice")
-                        print()
-                        pause()
+                        pause("  Press Enter (or any key) to continue...")
                 try:
                     from patcher.auto_repatch import sync_auto_repatch_state
                     sync_auto_repatch_state(main_js_path, manager_path, agy_path)
@@ -1484,13 +1518,11 @@ def run_cli():
             else:
                 print_menu_row("4", "Enable Direct Hosts-Pinning (VPN-Proof)", "pin verified SNI proxy to etc/hosts (recommended with VPN)", COLOR_GREEN)
 
-            print_menu_row("0", "Back to main menu", "", COLOR_YELLOW)
+            print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_YELLOW)
+            print_menu_footer("0 / Enter / b — Back to main menu.")
             print()
-            try:
-                sub = input(color("  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-            except EOFError:
-                sub = "0"
-            if sub in ("0", "", "b", "back", "q", "quit", "exit"):
+            sub = _read_menu_input("  Select option > ")
+            if sub in _BACK_CHOICES:
                 handled = False
             elif sub == "3" or (sub == "1" and is_active):
                 ok_flag, msg = disable_nrpt_rule()
@@ -1517,12 +1549,9 @@ def run_cli():
                 handled = True
             elif sub == "2":
                 print()
-                hint("Enter your dedicated DNS IP or server hostname (or 0 / Enter to cancel):")
-                try:
-                    custom_ip = input(color("  Private DNS IP / Host > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                except EOFError:
-                    custom_ip = ""
-                if not custom_ip or custom_ip.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                hint("Enter your dedicated DNS IP or server hostname (or 0 / Enter / b to cancel):")
+                custom_ip = _read_path_input("  Private DNS IP / Host > ")
+                if not custom_ip or custom_ip.lower() in _BACK_CHOICES:
                     cancel("Cancelled.")
                     handled = False
                 else:
@@ -1566,32 +1595,29 @@ def run_cli():
                 print_menu_row("4", "VS Code extension path (JS)", "extension.js or extensions folder", COLOR_GREEN)
                 print_menu_row("5", "VS Code binary path (agy)", "agy/antigravity binary in ~/.gemini/bin", COLOR_GREEN)
                 print()
-                print_menu_row("0", "Back", "return to main menu", COLOR_RED)
-                print_menu_footer("Leaves auto-detection results intact for other targets.")
+                print_menu_row("0", "Back to main menu", "Enter / 0 / b", COLOR_RED)
+                print_menu_footer("0 / Enter / b — Back  |  Leaves auto-detection results intact for other targets.")
 
-                try:
-                    sub_choice = input(color("\n  Select option > ", COLOR_CYAN, COLOR_BOLD)).strip().lower()
-                except EOFError:
-                    sub_choice = "0"
-                if sub_choice in ("0", "", "b", "back", "q", "quit", "exit"):
+                sub_choice = None
+                while True:
+                    raw_sub = _read_menu_input("\n  Select option > ")
+                    if raw_sub in _BACK_CHOICES:
+                        sub_choice = "0"
+                        break
+                    if raw_sub in ("1", "2", "3", "4", "5"):
+                        sub_choice = raw_sub
+                        break
+                    err(f"Unknown option '{raw_sub}' — enter 1-5 or press Enter / 0 / b to go back.")
+                if sub_choice == "0":
                     handled = False
                     break
 
-                if sub_choice not in ("1", "2", "3", "4", "5"):
-                    err("Invalid choice")
-                    print()
-                    pause()
-                    continue
-
                 if sub_choice == "1":
                      print()
-                     hint("Enter the path to Antigravity IDE folder or main.js file (or 0 / Enter to cancel).")
+                     hint("Enter the path to Antigravity IDE folder or main.js file (or 0 / Enter / b to cancel).")
                      print_path_examples()
-                     try:
-                         raw = input(color("\n  IDE Path > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                     except EOFError:
-                         raw = ""
-                     if not raw or raw.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                     raw = _read_path_input("\n  IDE Path > ")
+                     if not raw or raw.lower() in _BACK_CHOICES:
                          cancel("Cancelled.")
                          continue
                      new_path = resolve_target_path(raw)
@@ -1606,16 +1632,13 @@ def run_cli():
                      else:
                          err("Path does not exist.")
                      print()
-                     pause()
+                     pause("  Press Enter (or any key) to continue...")
                 elif sub_choice == "2":
                      print()
-                     hint("Enter the path to Antigravity 2.0 app folder or language_server binary (or 0 / Enter to cancel).")
+                     hint("Enter the path to Antigravity 2.0 app folder or language_server binary (or 0 / Enter / b to cancel).")
                      print_path_examples()
-                     try:
-                         raw = input(color("\n  Antigravity 2.0 Path > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                     except EOFError:
-                         raw = ""
-                     if not raw or raw.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                     raw = _read_path_input("\n  Antigravity 2.0 Path > ")
+                     if not raw or raw.lower() in _BACK_CHOICES:
                          cancel("Cancelled.")
                          continue
                      new_path = resolve_manager_path(raw)
@@ -1625,16 +1648,13 @@ def run_cli():
                      else:
                          err("Could not resolve a valid Antigravity 2.0 target (language_server not found).")
                      print()
-                     pause()
+                     pause("  Press Enter (or any key) to continue...")
                 elif sub_choice == "3":
                      print()
-                     hint("Enter the path to the agy binary (agy.exe) or its folder (or 0 / Enter to cancel).")
+                     hint("Enter the path to the agy binary (agy.exe) or its folder (or 0 / Enter / b to cancel).")
                      print_path_examples()
-                     try:
-                         raw = input(color("\n  AGY Path > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                     except EOFError:
-                         raw = ""
-                     if not raw or raw.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                     raw = _read_path_input("\n  AGY Path > ")
+                     if not raw or raw.lower() in _BACK_CHOICES:
                          cancel("Cancelled.")
                          continue
                      new_path = resolve_agy_path(raw)
@@ -1644,16 +1664,13 @@ def run_cli():
                      else:
                          err("Could not resolve a valid Antigravity CLI target.")
                      print()
-                     pause()
+                     pause("  Press Enter (or any key) to continue...")
                 elif sub_choice == "4":
                      print()
                      hint("Enter the path to extension.js, the google.google-antigravity-*")
-                     hint("extension folder, or the .vscode/extensions root folder (or 0 / Enter to cancel).")
-                     try:
-                         raw = input(color("\n  VS Code Extension Path (JS) > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                     except EOFError:
-                         raw = ""
-                     if not raw or raw.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                     hint("extension folder, or the .vscode/extensions root folder (or 0 / Enter / b to cancel).")
+                     raw = _read_path_input("\n  VS Code Extension Path (JS) > ")
+                     if not raw or raw.lower() in _BACK_CHOICES:
                          cancel("Cancelled.")
                          continue
                      new_path = resolve_extension_path(raw)
@@ -1663,16 +1680,13 @@ def run_cli():
                      else:
                          err("Could not resolve a valid VS Code extension target (extension.js not found).")
                      print()
-                     pause()
+                     pause("  Press Enter (or any key) to continue...")
                 elif sub_choice == "5":
                      print()
                      hint(f"Enter the path to the agy/antigravity binary downloaded")
-                     hint(f"by the extension ({describe_gemini_binary_path()}) or any agy file (or 0 / Enter to cancel).")
-                     try:
-                         raw = input(color("\n  VS Code Binary Path (agy) > ", COLOR_CYAN, COLOR_BOLD)).strip()
-                     except EOFError:
-                         raw = ""
-                     if not raw or raw.lower() in ("0", "b", "back", "q", "quit", "exit"):
+                     hint(f"by the extension ({describe_gemini_binary_path()}) or any agy file (or 0 / Enter / b to cancel).")
+                     raw = _read_path_input("\n  VS Code Binary Path (agy) > ")
+                     if not raw or raw.lower() in _BACK_CHOICES:
                          cancel("Cancelled.")
                          continue
                      new_path = resolve_agy_path(raw)
@@ -1682,11 +1696,11 @@ def run_cli():
                      else:
                          err("Could not resolve a valid VS Code agy binary target.")
                      print()
-                     pause()
+                     pause("  Press Enter (or any key) to continue...")
         elif choice == "17":
             show_about()
             print()
-            pause("  Press Enter, 0 or any key to return to menu...")
+            pause("  Press Enter (or any key) to return to menu...")
             handled = False
         elif choice == "18":
             print_menu_section("INSTALL ANTIGRAVITY ASSISTANT EXTENSION")
@@ -1706,8 +1720,10 @@ def run_cli():
             handled = True
         elif choice == "20":
             from patcher.conversations.rebuilder import run_rebuild_wizard
-            run_rebuild_wizard()
-            handled = True
+            if run_rebuild_wizard() is False:
+                handled = False
+            else:
+                handled = True
 
         print()
 
