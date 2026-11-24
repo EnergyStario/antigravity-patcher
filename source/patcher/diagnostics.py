@@ -643,7 +643,7 @@ def _make_error_db() -> List[KnownError]:
                         bp = str(last_win.get("backupPath") or "")
                         if bp:
                             issues["backup_ids"].add(Path(bp).name)
-                        if (ui.get("width", 1280) < 700 and ui.get("height", 800) < 450) or bp:
+                        if ui.get("width", 1280) < 700 and ui.get("height", 800) < 450:
                             issues["fix_storage"] = True
             except Exception:
                 pass
@@ -686,7 +686,9 @@ def _make_error_db() -> List[KnownError]:
                     try:
                         pd = _json.loads(raw_panel)
                         if isinstance(pd, dict) and isinstance(pd.get("antigravity.panel"), dict) and pd["antigravity.panel"].get("isHidden") is True:
-                            needs_panel = True
+                            # Only treat hidden panel as broken session when workspace is untrusted OR window is stuck small (<700x450)
+                            if needs_trust or issues["fix_storage"]:
+                                needs_panel = True
                     except Exception:
                         pass
                 if needs_trust or needs_panel:
@@ -763,13 +765,14 @@ def _make_error_db() -> List[KnownError]:
 
         try:
             from patcher.extension_installer import deploy_assistant_extension
-            deploy_assistant_extension()
+            if changed:
+                deploy_assistant_extension()
         except Exception:
             pass
 
         if changed:
             ok("Восстановлен доверенный режим пустой сессии Antigravity IDE и панель агента.")
-        return True
+        return bool(changed)
 
     def _is_user_location_400_fixed(ctx):
         loc_keys = ("user_location_400", "is_google_internal")
@@ -2920,10 +2923,12 @@ def run_autopilot_guardian(
             _mark_cooldown("ide_session")
             sess_err = next((k for k in found_fresh if k.key == "ide_session_blocked"), None)
             if sess_err and sess_err.is_already_fixed_fn and not sess_err.is_already_fixed_fn({}):
+                fixed_sess = False
                 if sess_err.fix_fn:
-                    _run_silent(sess_err.fix_fn, {})
-                actions.append("ide_session_healed")
-                restart_apps["ide"] = True
+                    fixed_sess = bool(_run_silent(sess_err.fix_fn, {}))
+                if fixed_sess:
+                    actions.append("ide_session_healed")
+                    restart_apps["ide"] = True
 
         # Do NOT force-kill/reset running Antigravity on 429 quota limits from background autopilot.
         if "sqlite_corrupt" in fresh_keys and _cooldown_ready("sqlite", 1800):

@@ -715,4 +715,54 @@ def test_ide_extension_manifest_supports_untrusted_workspaces():
     assert (caps.get("untrustedWorkspaces") or {}).get("supported") is True
 
 
+def test_healthy_ide_with_hidden_panel_and_handle_auth_refresh_does_not_restart(tmp_path: Path, monkeypatch):
+    import sqlite3
+    from patcher import auto_repatch, diagnostics
+
+    ag_tools = tmp_path / "ag_tools"
+    monkeypatch.setenv("AG_TOOLS_DIR", str(ag_tools))
+    user_data = tmp_path / "Antigravity IDE"
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    ws_id = "1795524876223"
+    ws_dir = user_data / "User" / "workspaceStorage" / ws_id
+    ws_dir.mkdir(parents=True)
+    vscdb = ws_dir / "state.vscdb"
+    con = sqlite3.connect(str(vscdb))
+    con.execute("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+    con.execute("INSERT INTO ItemTable VALUES (?, ?)", ("memento/workspaceTrust", json.dumps({"isEmptyWorkspaceTrusted": True})))
+    con.execute("INSERT INTO ItemTable VALUES (?, ?)", ("antigravity.agentViewContainerId.state", json.dumps({"antigravity.panel": {"collapsed": False, "isHidden": True, "size": 663}})))
+    con.commit()
+    con.close()
+
+    gs_dir = user_data / "User" / "globalStorage"
+    gs_dir.mkdir(parents=True)
+    (gs_dir / "storage.json").write_text(
+        json.dumps({
+            "backupWorkspaces": {"emptyWindows": [{"backupFolder": ws_id}]},
+            "windowsState": {"lastActiveWindow": {"uiState": {"mode": 0, "width": 1200, "height": 800}}},
+        }),
+        encoding="utf-8",
+    )
+
+    rend_dir = user_data / "logs" / "20261124T174902" / "window1"
+    rend_dir.mkdir(parents=True)
+    (rend_dir / "renderer.log").write_text(
+        "2026-11-24 17:54:03.610 [error] command 'antigravity.handleAuthRefresh' not found\n",
+        encoding="utf-8",
+    )
+
+    with mock.patch.object(diagnostics, "_get_log_base_dirs", return_value=[user_data / "logs"]), \
+         mock.patch.object(auto_repatch, "inspect_targets", return_value={"needs_any": False}), \
+         mock.patch.object(auto_repatch, "_append_log"), \
+         mock.patch.object(diagnostics, "ensure_target_and_env_healthy", return_value={"connectivity_ok": True}), \
+         mock.patch.object(diagnostics, "_detect_running_antigravity_apps", return_value={"ide": True, "manager": False}), \
+         mock.patch.object(diagnostics, "_restart_antigravity_apps") as rest_mock:
+        res = diagnostics.run_autopilot_guardian(quiet=True, target_app="all")
+
+    assert "ide_session_healed" not in res["actions"]
+    rest_mock.assert_not_called()
+
+
+
 
