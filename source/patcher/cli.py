@@ -627,18 +627,42 @@ def _is_target_unlocked(target_key: str, main_js_path: str = "") -> bool:
     return False
 
 
-def _maybe_upgrade_unlocked_target(target_key: str, current_path: str, main_js_path: str = "") -> tuple[bool, str]:
-    """Check official feed and silently install newer release (even if Google's native updater was disabled/locked)."""
+def _hint_if_unlocked_update_available(target_key: str, main_js_path: str = "") -> None:
+    """Print a non-blocking 1-line hint if an unlocked target already has a cached newer version."""
+    if not _HAVE_APP_UPDATER or not _is_target_unlocked(target_key, main_js_path):
+        return
+    try:
+        cached = get_cached_update_info(target_key)
+        if cached and cached.get("update_available") and cached.get("latest_version"):
+            new_v = cached["latest_version"]
+            hint(tr(
+                f"Update v{new_v} is available — install it anytime via [10] -> [5].",
+                f"Доступно обновление v{new_v} — установить можно в [10] -> [5].",
+            ))
+    except Exception:
+        pass
+
+
+def _maybe_upgrade_unlocked_target(
+    target_key: str,
+    current_path: str,
+    main_js_path: str = "",
+    respect_lock: bool = True,
+) -> tuple[bool, str]:
+    """Check official feed and install newer release when permitted by update lock."""
     if not _HAVE_APP_UPDATER or not current_path or not os.path.isfile(current_path):
         return False, current_path
+    locked_cb = (lambda: not _is_target_unlocked(target_key, main_js_path)) if respect_lock else None
     try:
-        updated, new_path, _ = check_and_install_component_update(
+        updated, new_path, upd_info = check_and_install_component_update(
             target_key,
             current_path,
-            is_locked_fn=None,
+            is_locked_fn=locked_cb,
             quiet=False,
             auto_install=True,
         )
+        if upd_info and upd_info.get("skipped_locked"):
+            return False, current_path
         if updated:
             invalidate_menu_status_cache()
             _TARGET_STATUS_CACHE.clear()
@@ -1063,7 +1087,7 @@ def run_cli():
         _, _cli_hint_ver = _target_ver_label("cli", agy_path, _is_target_unlocked("cli", main_js_path))
         print_menu_section(tr("PATCH", "ПАТЧИНГ"))
         print_menu_row("1", tr("Apply all patches", "Применить все патчи"),
-                       tr("check updates, apply all patches & relaunch", "обновить, пропатчить всё и перезапустить"), COLOR_GREEN)
+                       tr("apply all patches & relaunch apps", "пропатчить всё и перезапустить"), COLOR_GREEN)
         print_menu_row("2", tr("Antigravity IDE patch", "Патч Antigravity IDE"),
                        (tr(f"configure IDE runtime ({_ide_hint_ver})", f"настроить IDE ({_ide_hint_ver})")
                         if _ide_hint_ver else tr("configure IDE runtime", "настроить среду IDE")), COLOR_GREEN)
@@ -1230,7 +1254,7 @@ def run_cli():
 
                 if main_js_path and os.path.isfile(main_js_path):
                     print_menu_section(tr("1 / 5 - Antigravity IDE patch", "1 / 5 - Патч Antigravity IDE"))
-                    _, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
+                    _hint_if_unlocked_update_available("ide", main_js_path)
                     do_patch(main_js_path)
                 else:
                     warn(tr("IDE (main.js) not found - skipping (use TOOLS -> 16 to set path)",
@@ -1239,7 +1263,7 @@ def run_cli():
                 # 2/5 - Manager patch
                 if manager_path and os.path.isfile(manager_path):
                     print_menu_section(tr("2 / 5 - Antigravity 2.0 patch", "2 / 5 - Патч Antigravity 2.0"))
-                    _, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
+                    _hint_if_unlocked_update_available("manager", main_js_path)
                     do_patch_manager(manager_path)
                 else:
                     warn(tr("Antigravity 2.0 (language_server) not found - skipping",
@@ -1250,7 +1274,7 @@ def run_cli():
                     agy_path = find_agy_binary() or ""
                 if agy_path and os.path.isfile(agy_path):
                     print_menu_section(tr("3 / 5 - Antigravity CLI (agy) patch", "3 / 5 - Патч Antigravity CLI (agy)"))
-                    _, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
+                    _hint_if_unlocked_update_available("cli", main_js_path)
                     do_patch_agy(agy_path)
                 else:
                     warn(tr("Antigravity CLI (agy) not found - skipping",
@@ -1303,7 +1327,7 @@ def run_cli():
             try:
                 from patcher.ide.patcher import ensure_agy_backend_patched
                 if main_js_path and os.path.isfile(main_js_path):
-                    _, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
+                    _hint_if_unlocked_update_available("ide", main_js_path)
                     do_patch(main_js_path, show_search_line=False)
                     from patcher.extension_installer import deploy_assistant_extension
                     deploy_assistant_extension(export_vsix=False)
@@ -1314,7 +1338,7 @@ def run_cli():
                     new_p = offer_download_and_block("Antigravity IDE", target_type="ide")
                     if new_p:
                         main_js_path = new_p
-                        _, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
+                        _hint_if_unlocked_update_available("ide", main_js_path)
                         do_patch(main_js_path, show_search_line=False)
                         from patcher.extension_installer import deploy_assistant_extension
                         deploy_assistant_extension(export_vsix=False)
@@ -1334,7 +1358,7 @@ def run_cli():
         elif choice == "3":
             try:
                 if manager_path and os.path.isfile(manager_path):
-                    _, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
+                    _hint_if_unlocked_update_available("manager", main_js_path)
                     do_patch_manager(manager_path)
                     if is_mgr_patched(manager_path):
                         from patcher.extension_installer import deploy_antigravity_2_ui
@@ -1345,7 +1369,7 @@ def run_cli():
                     new_p = offer_download_and_block("Antigravity 2.0", target_type="manager")
                     if new_p:
                         manager_path = new_p
-                        _, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
+                        _hint_if_unlocked_update_available("manager", main_js_path)
                         do_patch_manager(manager_path)
                         if is_mgr_patched(manager_path):
                             from patcher.extension_installer import deploy_antigravity_2_ui
@@ -1365,14 +1389,14 @@ def run_cli():
         elif choice == "4":
             try:
                 if agy_path and os.path.isfile(agy_path):
-                    _, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
+                    _hint_if_unlocked_update_available("cli", main_js_path)
                     do_patch_agy(agy_path)
                     _run_env_heal(target="cli", quiet=False, agy_path=agy_path)
                 else:
                     new_p = offer_download_and_block("Antigravity CLI", target_type="agy")
                     if new_p:
                         agy_path = new_p
-                        _, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
+                        _hint_if_unlocked_update_available("cli", main_js_path)
                         do_patch_agy(agy_path)
                         _run_env_heal(target="cli", quiet=False, agy_path=agy_path)
                     else:
@@ -1574,17 +1598,17 @@ def run_cli():
                             invalidate_app_update_cache()
                         did_any_upd = False
                         if main_js_path and os.path.isfile(main_js_path):
-                            did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path)
+                            did_i, main_js_path = _maybe_upgrade_unlocked_target("ide", main_js_path, main_js_path, respect_lock=False)
                             if did_i:
                                 did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("ide", main_js_path, launch_after=True)
                         if manager_path and os.path.isfile(manager_path):
-                            did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path)
+                            did_m, manager_path = _maybe_upgrade_unlocked_target("manager", manager_path, main_js_path, respect_lock=False)
                             if did_m:
                                 did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("manager", manager_path, launch_after=True)
                         if agy_path and os.path.isfile(agy_path):
-                            did_c, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path)
+                            did_c, agy_path = _maybe_upgrade_unlocked_target("cli", agy_path, main_js_path, respect_lock=False)
                             if did_c:
                                 did_any_upd = True
                                 _apply_patch_deploy_and_launch_for_target("cli", agy_path, launch_after=False)

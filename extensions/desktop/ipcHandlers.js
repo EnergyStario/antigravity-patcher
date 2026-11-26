@@ -1049,7 +1049,10 @@ function registerIpcHandlers(storageManager) {
                 if (!wc || wc.isDestroyed?.()) continue;
                 const curUrl = String(wc.getURL?.() || '');
                 if (curUrl === targetUrl) continue;
-                if (typeof w.loadURL === 'function') {
+                if (typeof utils_1.loadHubWindowUrl === 'function') {
+                    void Promise.resolve(utils_1.loadHubWindowUrl(w, targetUrl)).catch(() => {});
+                    navigated = true;
+                } else if (typeof w.loadURL === 'function') {
                     void Promise.resolve(w.loadURL(targetUrl)).catch(() => {});
                     navigated = true;
                 } else if (typeof wc.loadURL === 'function') {

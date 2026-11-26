@@ -485,7 +485,7 @@ def start_background_update_checks(
     return t
 
 
-def _download_with_progress(url: str, dest_path: str, expected_size: int = 0, quiet: bool = False, timeout: float = 60.0) -> bool:
+def _download_with_progress(url: str, dest_path: str, expected_size: int = 0, quiet: bool = False, timeout: float = 25.0) -> bool:
     req = urllib.request.Request(url, headers={"User-Agent": f"AntigravityPatcher/{VERSION}"})
     tmp_path = dest_path + ".part"
     downloaded = 0
@@ -571,7 +571,26 @@ def _stop_target_processes(target: str) -> None:
         except Exception:
             pass
     if names:
-        time.sleep(0.8)
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            still_alive = False
+            try:
+                tl = subprocess.run(
+                    ["tasklist", "/FO", "CSV", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    errors="ignore",
+                    timeout=3,
+                    creationflags=creation_flags,
+                )
+                out_low = (tl.stdout or "").lower()
+                if any(f'"{img.lower()}"' in out_low for img in names):
+                    still_alive = True
+            except Exception:
+                pass
+            if not still_alive:
+                break
+            time.sleep(0.4)
 
 
 def _rediscover_target_path(target: str, fallback: str = "") -> str:

@@ -569,20 +569,42 @@ def _run_auto_repatch_impl(
         try:
             from patcher.utils.launcher import detect_running_antigravity_apps
             from patcher.app_updater import check_and_install_component_update
+            from patcher.updater_lock import is_ide_locked, is_manager_locked
+
+            def _resolve_ide_root_for_lock(mjs: str) -> str | None:
+                if not mjs:
+                    return None
+                p = Path(mjs)
+                for _ in range(5):
+                    if (p / "Antigravity IDE.exe").is_file():
+                        return str(p)
+                    p = p.parent
+                return None
 
             if not is_installer_busy() and _should_check_app_updates():
                 _mark_app_updates_checked()
                 pre_update_running = detect_running_antigravity_apps()
-                did_i, new_i, _ = check_and_install_component_update(
-                    "ide", main_js_path, quiet=True, auto_install=True
-                )
-                if did_i and new_i:
-                    main_js_path = new_i
-                did_m, new_m, _ = check_and_install_component_update(
-                    "manager", manager_path, quiet=True, auto_install=True
-                )
-                if did_m and new_m:
-                    manager_path = new_m
+                ide_root_lock = _resolve_ide_root_for_lock(main_js_path)
+                if main_js_path and not is_ide_locked(ide_root_lock):
+                    did_i, new_i, _ = check_and_install_component_update(
+                        "ide",
+                        main_js_path,
+                        is_locked_fn=lambda: is_ide_locked(ide_root_lock),
+                        quiet=True,
+                        auto_install=True,
+                    )
+                    if did_i and new_i:
+                        main_js_path = new_i
+                if manager_path and not is_manager_locked():
+                    did_m, new_m, _ = check_and_install_component_update(
+                        "manager",
+                        manager_path,
+                        is_locked_fn=is_manager_locked,
+                        quiet=True,
+                        auto_install=True,
+                    )
+                    if did_m and new_m:
+                        manager_path = new_m
         except Exception as exc:
             _append_log(f"auto update check warning: {exc}")
 

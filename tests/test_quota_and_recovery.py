@@ -6608,3 +6608,149 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
                     cli.run_cli()
                 pause_mock.assert_not_called()
                 self.assertEqual(i18n.get_lang(), "en")
+
+    def test_234_clear_ls_process_no_lsport_error_and_patch_never_auto_upgrades(self):
+        """Antigravity 2.34+ clearLsProcess must not throw ReferenceError(_lsPort), and Patch flows must not auto-upgrade locked/normal targets."""
+        from patcher.manager import asar_patcher
+        from patcher import auto_repatch, cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app_root = Path(tmp) / "antigravity"
+            bin_dir = app_root / "resources" / "bin"
+            res_dir = app_root / "resources"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            mgr_bin = bin_dir / "language_server.exe"
+            mgr_bin.write_bytes(b"stub")
+            asar_path = res_dir / "app.asar"
+
+            utils_234 = (
+                "const handleDidFinishLoad = () => {\n"
+                "    if (!win.isDestroyed?.() && !hubContents.isDestroyed?.()) {\n"
+                "        void applyStoredZoomLevel();\n"
+                "    }\n"
+                "};\n"
+            )
+            # Simulate an already-broken patched 2.34 app.asar (no let _lsPort, legacy _lsPort = 0; line present)
+            ls_234_broken = (
+                '"use strict";\n'
+                "const authBootstrap_1 = require('./authBootstrap');\n"
+                "exports.setIntentionalTermination = setIntentionalTermination;\n"
+                "let _lsProcess = { pid: 99 };\n"
+                "let _restartCount = 2;\n"
+                "let _lastRestartTime = 123;\n"
+                "function clearLsProcess() {\n"
+                "    _lsProcess = null;\n"
+                f"    _lsPort = 0; {asar_patcher._LS_PORT_RESET_MARKER}\n"
+                "}\n"
+                "function setIntentionalTermination(v) {}\n"
+            )
+            preload_234 = "electron_1.contextBridge.exposeInMainWorld('wsl', wslAPI);\n"
+            ipc_234 = (
+                "function registerIpcHandlers(storageManager) {\n"
+                "    (0, wcvIpcHandlers_1.registerWcvIpcHandlers)();\n"
+                "}\n"
+            )
+            _build_asar(
+                asar_path,
+                {
+                    "package.json": b'{"version":"2.34.0"}',
+                    "dist/utils.js": utils_234.encode("utf-8"),
+                    "dist/languageServer.js": ls_234_broken.encode("utf-8"),
+                    "dist/preload.js": preload_234.encode("utf-8"),
+                    "dist/ipcHandlers.js": ipc_234.encode("utf-8"),
+                },
+            )
+
+            # Old broken _lsPort = 0 injection must be detected as unpatched so auto-repatch upgrades it
+            self.assertFalse(asar_patcher.is_asar_ui_patched(str(mgr_bin)))
+            self.assertTrue(asar_patcher.patch_desktop_asar(str(mgr_bin), kill_on_lock=False))
+            self.assertTrue(asar_patcher.is_asar_ui_patched(str(mgr_bin)))
+
+            with open(asar_path, "rb") as f:
+                hdr, base = asar_patcher._read_asar_header(f)
+                ln = asar_patcher._get_node(hdr, "dist/languageServer.js")
+                assert ln
+                f.seek(base + int(ln["offset"]))
+                patched_ls = f.read(int(ln["size"])).decode("utf-8")
+
+            self.assertNotIn("\n    _lsPort = 0; // AG_TOOLKIT_LS_PORT_RESET", patched_ls)
+            self.assertIn("typeof _lsPort !== 'undefined'", patched_ls)
+
+            # Execute patched languageServer.js in Node without _lsPort declared
+            node_script = textwrap.dedent(f"""
+                const assert = require('assert');
+                const Module = require('module');
+                const origLoad = Module._load;
+                const authCalls = [];
+                Module._load = function (request, parent, isMain) {{
+                    if (request === './authBootstrap') {{
+                        return {{ setActiveLanguageServerAuth: (p) => authCalls.push(p) }};
+                    }}
+                    return origLoad.call(this, request, parent, isMain);
+                }};
+                const lsFile = {json.dumps(str(Path(tmp) / 'ls234.js'))};
+                require('fs').writeFileSync(lsFile, {json.dumps(patched_ls)}, 'utf8');
+                const m = require(lsFile);
+                // Re-run clearLsProcess exported logic via module evaluation by adding temporary getter
+                const code = {json.dumps(patched_ls)} + "\\nexports._callClear = () => clearLsProcess();\\n";
+                require('fs').writeFileSync(lsFile, code, 'utf8');
+                delete require.cache[require.resolve(lsFile)];
+                const m2 = require(lsFile);
+                m2._callClear();
+                assert.strictEqual(authCalls.length, 1);
+                assert.strictEqual(authCalls[0].port, 0);
+                console.log(JSON.stringify({{ ok: true }}));
+            """)
+            node_res = _run_node(node_script)
+            self.assertTrue(node_res["ok"])
+
+            # Verify locked _maybe_upgrade_unlocked_target and run_auto_repatch skip component updates
+            with mock.patch.object(cli, "_is_target_unlocked", return_value=False), \
+                 mock.patch("patcher.app_updater.check_component_update") as upd_check_mock:
+                did_u, out_p = cli._maybe_upgrade_unlocked_target("manager", str(mgr_bin), respect_lock=True)
+            self.assertFalse(did_u)
+            self.assertEqual(out_p, str(mgr_bin))
+            upd_check_mock.assert_not_called()
+
+            # Verify CLI Option 3 ("Patch Antigravity 2.0") never invokes check_and_install_component_update
+            seq_cli = iter(["3", "0"])
+            with mock.patch.dict(os.environ, {"AG_LANG": "en", "AG_DISABLE_STARTUP_AUTOPILOT": "1"}), \
+                 mock.patch.object(sys, "argv", ["cli.py"]), \
+                 mock.patch.object(cli, "find_install_root", return_value=""), \
+                 mock.patch.object(cli, "find_manager_binary", return_value=str(mgr_bin)), \
+                 mock.patch.object(cli, "find_agy_binary", return_value=""), \
+                 mock.patch.object(cli, "find_extension_js", return_value=""), \
+                 mock.patch.object(cli, "find_gemini_antigravity_binary", return_value=""), \
+                 mock.patch.object(cli, "redraw_main_screen"), \
+                 mock.patch.object(cli, "clear_screen"), \
+                 mock.patch.object(cli, "print_banner"), \
+                 mock.patch.object(cli, "pause"), \
+                 mock.patch.object(cli, "do_patch_manager"), \
+                 mock.patch.object(cli, "is_mgr_patched", return_value=True), \
+                 mock.patch("patcher.extension_installer.deploy_antigravity_2_ui"), \
+                 mock.patch.object(cli, "_run_env_heal"), \
+                 mock.patch.object(cli, "launch_application"), \
+                 mock.patch("patcher.auto_repatch.sync_auto_repatch_state"), \
+                 mock.patch("patcher.app_updater.check_and_install_component_update") as cli_upd_mock, \
+                 mock.patch("builtins.input", side_effect=lambda *_a, **_kw: next(seq_cli)):
+                cli.run_cli()
+            cli_upd_mock.assert_not_called()
+
+            # Verify auto_repatch.run_auto_repatch respects is_ide_locked / is_manager_locked
+            with mock.patch.dict(os.environ, {"AG_TOOLS_DIR": tmp, "AG_AUTO_REPATCH_SILENT": "1"}), \
+                 mock.patch.object(auto_repatch, "_tools_dir", return_value=Path(tmp)), \
+                 mock.patch.object(auto_repatch, "wait_for_installer_idle", return_value=True), \
+                 mock.patch.object(auto_repatch, "is_installer_busy", return_value=False), \
+                 mock.patch.object(auto_repatch, "_should_check_app_updates", return_value=True), \
+                 mock.patch.object(auto_repatch, "_mark_app_updates_checked"), \
+                 mock.patch("patcher.diagnostics.ensure_target_and_env_healthy", return_value={"ok": True}), \
+                 mock.patch("patcher.updater_lock.is_ide_locked", return_value=True), \
+                 mock.patch("patcher.updater_lock.is_manager_locked", return_value=True), \
+                 mock.patch("patcher.app_updater.check_and_install_component_update") as bg_upd_mock, \
+                 mock.patch.object(auto_repatch, "inspect_targets", return_value={"needs_any": False}):
+                ar_res = auto_repatch.run_auto_repatch(
+                    main_js_path=str(mgr_bin),
+                    manager_path=str(mgr_bin),
+                )
+            self.assertFalse(ar_res["changed"])
+            bg_upd_mock.assert_not_called()

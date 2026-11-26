@@ -89,7 +89,9 @@ _UTILS_FAIL_BLOCK = r"""    // AG_TOOLKIT_FAIL_RECOVER_START
                     if (_agCurNow === _agTargetUrl && !hubContents.isLoading?.()) {
                         return;
                     }
-                    void (win.loadURL ? win.loadURL(_agTargetUrl) : hubContents.loadURL(_agTargetUrl));
+                    void (typeof loadHubWindowUrl === 'function'
+                        ? loadHubWindowUrl(win, _agTargetUrl)
+                        : (win.loadURL ? win.loadURL(_agTargetUrl) : hubContents.loadURL(_agTargetUrl)));
                     return;
                 }
             } catch (_) {}
@@ -508,7 +510,19 @@ def _patch_language_server_js(text: str) -> tuple[str, str]:
     eol = "\r\n" if "\r\n" in text else "\n"
     new_text = text
 
-    if _LS_PORT_RESET_MARKER not in new_text:
+    safe_port_stmt = (
+        "    try { if (typeof _lsPort !== 'undefined') { _lsPort = 0; } "
+        "else if (typeof authBootstrap_1 !== 'undefined' && typeof authBootstrap_1.setActiveLanguageServerAuth === 'function') "
+        "{ authBootstrap_1.setActiveLanguageServerAuth({ port: 0 }); } } catch (_) {} "
+        + _LS_PORT_RESET_MARKER
+    )
+    legacy_port_re = re.compile(
+        r"^[ \t]*_lsPort\s*=\s*0;[ \t]*" + re.escape(_LS_PORT_RESET_MARKER),
+        re.M,
+    )
+    if legacy_port_re.search(new_text):
+        new_text = legacy_port_re.sub(lambda _m: safe_port_stmt, new_text, count=1)
+    elif _LS_PORT_RESET_MARKER not in new_text:
         clear_re = re.compile(
             r"(function\s+clearLsProcess\s*\(\s*\)\s*\{\s*\r?\n[ \t]*_lsProcess\s*=\s*null;)"
         )
@@ -518,8 +532,7 @@ def _patch_language_server_js(text: str) -> tuple[str, str]:
         new_text = (
             new_text[: m_clr.end(1)]
             + eol
-            + "    _lsPort = 0; "
-            + _LS_PORT_RESET_MARKER
+            + safe_port_stmt
             + new_text[m_clr.end(1) :]
         )
 
@@ -700,9 +713,11 @@ def _is_asar_file_patched(asar_path: str) -> bool:
             if ls_node and "offset" in ls_node:
                 f.seek(base + int(ls_node["offset"]))
                 ls_txt = f.read(int(ls_node["size"])).decode("utf-8", errors="ignore")
-                for needle in (_LS_START, _LS_PORT_RESET_MARKER, "resetRestartCount"):
+                for needle in (_LS_START, _LS_PORT_RESET_MARKER, "typeof _lsPort !== 'undefined'", "resetRestartCount"):
                     if needle not in ls_txt:
                         return False
+                if re.search(r"^[ \t]*_lsPort\s*=\s*0;[ \t]*" + re.escape(_LS_PORT_RESET_MARKER), ls_txt, re.M):
+                    return False
                 if "loginShellEnv" in ls_txt and (_LS_ENV_START not in ls_txt or "await _agProbePort" in ls_txt):
                     return False
                 if "shellEnvReads.take()" in ls_txt and (_LS_PRE_START not in ls_txt or "_agProbeHost" not in ls_txt):
