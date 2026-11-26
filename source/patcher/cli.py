@@ -488,7 +488,17 @@ _MENU_STATUS_CACHE = {
 
 def _status_cache_file():
     from pathlib import Path
-    return Path.home() / ".antigravity_tools" / "patch_status_cache.json"
+    env_dir = os.environ.get("AG_TOOLS_DIR", "").strip()
+    base = Path(env_dir) if env_dir else (Path.home() / ".antigravity_tools")
+    return base / "cli_status_cache.json"
+
+
+def _cli_cache_sig() -> str:
+    try:
+        from patcher.auto_repatch import _patcher_logic_signature
+        return _patcher_logic_signature()
+    except Exception:
+        return str(VERSION)
 
 
 def _load_disk_status_cache() -> None:
@@ -503,7 +513,12 @@ def _load_disk_status_cache() -> None:
         import json
         raw = json.loads(p.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
+            meta = raw.get("__meta__")
+            if not isinstance(meta, dict) or meta.get("patcher_sig") != _cli_cache_sig():
+                return
             for path_str, rec in raw.items():
+                if path_str == "__meta__":
+                    continue
                 if isinstance(rec, dict) and "mtime_ns" in rec and "size" in rec and "patched" in rec:
                     _TARGET_STATUS_CACHE[(path_str, int(rec["mtime_ns"]), int(rec["size"]))] = bool(rec["patched"])
     except Exception:
@@ -514,7 +529,7 @@ def _save_disk_status_cache() -> None:
     try:
         p = _status_cache_file()
         p.parent.mkdir(parents=True, exist_ok=True)
-        out = {}
+        out = {"__meta__": {"patcher_sig": _cli_cache_sig()}}
         for k, patched in _TARGET_STATUS_CACHE.items():
             if isinstance(k, tuple) and len(k) == 3:
                 path_str, mtime_ns, size = k
@@ -715,7 +730,17 @@ def _cached_target_badge(label, path, checker_fn, is_text=False, target_key="", 
     _load_disk_status_cache()
     try:
         st = os.stat(path)
-        key = (path, st.st_mtime_ns, st.st_size)
+        cache_path_key = path
+        if target_key == "manager":
+            try:
+                from patcher.manager.discovery import find_asar_relative_to_manager
+                asar_p = find_asar_relative_to_manager(path)
+                if asar_p and os.path.isfile(asar_p):
+                    ast = os.stat(asar_p)
+                    cache_path_key = f"{path}|asar:{int(ast.st_mtime_ns)}:{int(ast.st_size)}"
+            except Exception:
+                pass
+        key = (cache_path_key, st.st_mtime_ns, st.st_size)
         if key in _TARGET_STATUS_CACHE:
             patched = _TARGET_STATUS_CACHE[key]
         else:

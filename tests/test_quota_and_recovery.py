@@ -6250,6 +6250,15 @@ class TestAppUpdaterPinSyncAndTooltipSync(unittest.TestCase):
                 self.assertFalse(r3["needs_agy"])
                 self.assertEqual(calls, 2, "Modified binary must invalidate cache")
 
+                # Stale cache from older patcher logic signature must auto-invalidate without touching binary
+                cache_json = tools_dir / "patch_status_cache.json"
+                saved_cache = json.loads(cache_json.read_text(encoding="utf-8"))
+                saved_cache["__meta__"] = {"patcher_sig": "old-stale-sig"}
+                cache_json.write_text(json.dumps(saved_cache), encoding="utf-8")
+                r4 = auto_repatch.inspect_targets()
+                self.assertFalse(r4["needs_agy"])
+                self.assertEqual(calls, 3, "Changed patcher signature must invalidate stale inspect cache")
+
             if sys.platform == "win32":
                 with (
                     mock.patch.object(auto_repatch.os, "name", "nt"),

@@ -31,7 +31,8 @@ def _home_dir() -> Path:
 
 
 def _tools_dir() -> Path:
-    return _home_dir() / ".antigravity_tools"
+    env_dir = os.environ.get("AG_TOOLS_DIR", "").strip()
+    return Path(env_dir) if env_dir else (_home_dir() / ".antigravity_tools")
 
 
 def _config_path() -> Path:
@@ -196,21 +197,61 @@ def _status_cache_file() -> Path:
     return _tools_dir() / "patch_status_cache.json"
 
 
+_PATCHER_LOGIC_SIG_CACHE: str | None = None
+
+
+def _patcher_logic_signature() -> str:
+    """Return a fast digest of current patcher checker logic so stale disk caches self-invalidate on patcher upgrades."""
+    global _PATCHER_LOGIC_SIG_CACHE
+    if _PATCHER_LOGIC_SIG_CACHE is not None:
+        return _PATCHER_LOGIC_SIG_CACHE
+    import hashlib
+    h = hashlib.sha256()
+    h.update(str(VERSION).encode("utf-8"))
+    for mod_name, fn_name in (
+        ("patcher.ide.patcher", "is_already_patched"),
+        ("patcher.manager.patcher", "is_already_patched"),
+        ("patcher.manager.asar_patcher", "_is_asar_file_patched"),
+        ("patcher.manager.asar_patcher", "_patch_language_server_js"),
+        ("patcher.agy.patcher", "is_already_patched"),
+        ("patcher.vscode.patcher", "is_already_patched"),
+        ("patcher.tls_fix", "is_tls_fix_applied"),
+    ):
+        try:
+            mod = __import__(mod_name, fromlist=[fn_name])
+            fn = getattr(mod, fn_name, None)
+            code = getattr(fn, "__code__", None)
+            if code is not None:
+                h.update(code.co_code)
+                h.update(repr(code.co_consts).encode("utf-8", errors="ignore"))
+        except Exception:
+            pass
+    _PATCHER_LOGIC_SIG_CACHE = h.hexdigest()[:16]
+    return _PATCHER_LOGIC_SIG_CACHE
+
+
 def _load_inspect_cache() -> dict[str, dict[str, Any]]:
     p = _status_cache_file()
+    sig = _patcher_logic_signature()
     if not p.is_file():
-        return {}
+        return {"__meta__": {"patcher_sig": sig}}
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
-        return raw if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return {"__meta__": {"patcher_sig": sig}}
+        meta = raw.get("__meta__")
+        if not isinstance(meta, dict) or meta.get("patcher_sig") != sig:
+            return {"__meta__": {"patcher_sig": sig}}
+        return raw
     except Exception:
-        return {}
+        return {"__meta__": {"patcher_sig": sig}}
 
 
 def _save_inspect_cache(cache: dict[str, dict[str, Any]]) -> None:
     try:
         p = _status_cache_file()
         p.parent.mkdir(parents=True, exist_ok=True)
+        cache["__meta__"] = {"patcher_sig": _patcher_logic_signature()}
         p.write_text(json.dumps(cache), encoding="utf-8")
     except Exception:
         pass
