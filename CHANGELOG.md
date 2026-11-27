@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-11-27
+
+### Added
+- **cli**: add persistent RU/EN localization and live [L] language toggle.
+
+### Fixed
+- **cache**: auto-invalidate inspect and CLI status cache on patcher or ASAR changes.
+- **manager,updater,cli**: guard _lsPort for 2.34+ and respect update locks on patch.
+- **autopilot**: avoid IDE restarts when sidebar panel is user-hidden.
+- **security,autopilot**: pass strict pre-release checks and auto-launch single primary app on first run.
+- **ide,updater,nrpt**: 429 auto-continue failover, IDE feed URL fallback, partial NRPT guard, and watcher sig preservation.
+- Scan renderer.log, auto-heal IDE Restricted Mode and rotate refused SNI IP.
+
 ## [1.2.0] - 2026-11-16
 
 ### Added

@@ -5009,7 +5009,15 @@ console.log(JSON.stringify({{
                   && !fastCandidates.some(a => a.id === 'acc3')
 }}));
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["heavyCorrect"],
                 f"Heavy sort wrong: {result.get('heavyOrder')} (expected acc2 first with claude%=80)")
             self.assertTrue(result["fastCorrect"],
@@ -5233,7 +5241,15 @@ const errors = Object.entries(results)
 
 console.log(JSON.stringify({{ ok: errors.length === 0, errors, results }}));
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"],
                 f"Model config override failures: {result.get('errors')}\n"
                 f"Results: {result.get('results')}")
@@ -5267,7 +5283,15 @@ const results = {{
 const errors = Object.entries(results).filter(([k,v]) => !v).map(([k]) => k);
 console.log(JSON.stringify({{ ok: errors.length === 0, errors }}));
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"],
                 f"Default tier failures (no config file): {result.get('errors')}")
 
@@ -5409,7 +5433,15 @@ const errors = Object.entries(results).filter(([, v]) => !v).map(([k]) => k);
 console.log(JSON.stringify({{ ok: errors.length === 0, errors, results }}));
 }})().catch(e => {{ console.error(e); process.exit(1); }});
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"], f"IDE Swarm test failed: {result}")
 
     def test_ide_swarm_status_bar_priority_formatting_rich_tooltip_and_completion(self):
@@ -5558,7 +5590,15 @@ ext.deactivate();
 ext._resetStateForTests();
 console.log(JSON.stringify({{ ok: true }}));
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"], f"IDE Swarm Status Bar test failed: {result}")
 
     def test_ide_swarm_three_level_quickpick_and_quick_launch_flow(self):
@@ -5726,7 +5766,15 @@ ext.activate(ctx);
     process.exit(1);
 }});
 """
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"], f"IDE Swarm QuickPick test failed: {result}")
 
     def test_ide_conversation_isolation_dirty_check_and_updater_lock(self):
@@ -5841,7 +5889,15 @@ ext.activate(ctx);
                 assert.strictEqual(picked, 'ide-conv-1', 'getActiveConversationId must return ide-conv-1, ignoring desktop-conv-99');
                 console.log(JSON.stringify({{ ok: true, picked }}));
             """)
-            result = _run_node(script, env_extra={"AG_TOOLS_DIR": tmpdir})
+            result = _run_node(
+                script,
+                env_extra={
+                    "AG_TOOLS_DIR": tmpdir,
+                    "USERPROFILE": tmpdir,
+                    "HOME": tmpdir,
+                    "APPDATA": tmpdir,
+                },
+            )
             self.assertTrue(result["ok"])
 
     def test_streamlined_1_click_launch_menu(self):

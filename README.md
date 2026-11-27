@@ -31,7 +31,7 @@
 | **Windows (x64)** | `Antigravity_Patcher_Windows_x64.exe` |
 | **macOS (Apple Silicon)** | `Antigravity_Patcher_macOS_arm64.tar.gz` |
 | **Linux (x64)** | `Antigravity_Patcher_Linux_x64.tar.gz` |
-| **IDE-расширение (VSIX)** | `ag-toolkit-1.2.0.vsix` |
+| **IDE-расширение (VSIX)** | `ag-toolkit-1.2.1.vsix` |
 
 ---
 

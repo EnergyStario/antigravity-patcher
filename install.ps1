@@ -16,7 +16,7 @@ if (-not $isAdmin) {
 }
 
 # 2. Deploy ag-toolkit extension
-$Version = "1.2.0"
+$Version = "1.2.1"
 $HomeDir = [System.Environment]::GetFolderPath('UserProfile')
 $ExtRoots = @(
     (Join-Path $HomeDir ".antigravity-ide\extensions"),
