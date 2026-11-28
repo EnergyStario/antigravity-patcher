@@ -19,7 +19,7 @@
 
 ### Вариант 1: Через VSIX
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\antigravity-ide.cmd" --install-extension ag-toolkit-1.2.1.vsix
+& "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\antigravity-ide.cmd" --install-extension ag-toolkit-1.2.2.vsix
 ```
 
 ---

@@ -1482,10 +1482,14 @@ function registerIpcHandlers(storageManager) {
                 let quotaPlan = null;
                 try {
                     if (eng && typeof eng.resolveQuotaExhaustionPlan === 'function') {
-                        const st = typeof eng.loadState === 'function' ? eng.loadState({ appTarget: 'ide' }) : null;
-                        const activeId = (st && st.active && st.active.id) || '';
+                        const st = typeof eng.loadState === 'function' ? eng.loadState({ appTarget: 'standalone' }) : null;
+                        const activeId = (st && ((st.activeAccount && st.activeAccount.id) || (st.active && st.active.id))) || '';
                         const prefOrch = (modelConfig && Array.isArray(modelConfig.orchestrator_order) && modelConfig.orchestrator_order[0]) || 'claude';
-                        quotaPlan = eng.resolveQuotaExhaustionPlan({ currentModel: prefOrch, currentAccountId: activeId });
+                        quotaPlan = eng.resolveQuotaExhaustionPlan({
+                            currentModel: prefOrch,
+                            currentAccountId: activeId,
+                            appTarget: 'standalone',
+                        });
                     }
                 } catch (_) {}
                 return {
@@ -1569,7 +1573,10 @@ function registerIpcHandlers(storageManager) {
                 };
             }
 
-            const res = await bridge.handleSwarmAction(op, data, { extraDirs: [_agToolsDir] });
+            const res = await bridge.handleSwarmAction(op, data, {
+                extraDirs: [_agToolsDir],
+                appTarget: 'standalone',
+            });
             if ((op === 'prepare' || op === 'resume') && res && res.ok && res.dispatchPrompt) {
                 try {
                     if (electron_1.clipboard && typeof electron_1.clipboard.writeText === 'function') {

@@ -2236,7 +2236,7 @@ function downloadFile(url, destPath) {
         const parsed = new URL(url);
         const getter = parsed.protocol === 'https:' ? https : http;
 
-        getter.get(url, { headers: { 'User-Agent': 'Antigravity-Assistant/1.2.1' } }, (res) => {
+        getter.get(url, { headers: { 'User-Agent': 'Antigravity-Assistant/1.2.2' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
                 return;
@@ -2278,11 +2278,11 @@ function checkForUpdatesOnStartup() {
     if (_startupUpdateTimer) { clearTimeout(_startupUpdateTimer); _startupUpdateTimer = null; }
     _startupUpdateTimer = setTimeout(async () => {
         try {
-            const currentVer = '1.2.1';
+            const currentVer = '1.2.2';
             const https = require('https');
             const data = await new Promise((resolve) => {
                 const req = https.get('https://api.github.com/repos/EnergyStario/antigravity-patcher/releases/latest', {
-                    headers: { 'User-Agent': 'Antigravity-Assistant/1.2.1' }
+                    headers: { 'User-Agent': 'Antigravity-Assistant/1.2.2' }
                 }, (res) => {
                     let buf = '';
                     res.on('data', c => buf += c);
@@ -2431,7 +2431,7 @@ async function checkCloudUpdates() {
             const https = require('https');
             const data = await new Promise((resolve) => {
                 const req = https.get('https://api.github.com/repos/EnergyStario/antigravity-patcher/releases/latest', {
-                    headers: { 'User-Agent': 'Antigravity-Assistant/1.2.1' }
+                    headers: { 'User-Agent': 'Antigravity-Assistant/1.2.2' }
                 }, (res) => {
                     let buf = '';
                     res.on('data', c => buf += c);
@@ -2448,10 +2448,10 @@ async function checkCloudUpdates() {
                 return;
             }
 
-            const currentVer = '1.2.1';
+            const currentVer = '1.2.2';
             const latestTag = (data.tag_name || '').replace(/^v/i, '');
             if (!latestTag || !isNewerVersion(latestTag, currentVer)) {
-                vscode.window.showInformationMessage(`У вас установлена актуальная версия (${data.tag_name || 'v1.2.1'})!`);
+                vscode.window.showInformationMessage(`У вас установлена актуальная версия (${data.tag_name || 'v1.2.2'})!`);
                 return;
             }
 

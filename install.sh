@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 REPO="EnergyStario/antigravity-patcher"
 VSIX_URL="https://github.com/${REPO}/releases/latest/download/ag-toolkit-${VERSION}.vsix"
 

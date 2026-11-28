@@ -15,6 +15,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HOSTS_COMMENT_BEGIN = "# AG_PATCHER_HOSTS_BEGIN"
@@ -133,12 +134,18 @@ def discover_sni_proxy_ip(
             except Exception:
                 continue
 
-    # 2. Probe pool of verified Google Cloud ESF frontends
-    for proxy in VERIFIED_SNI_PROXIES:
+    # 2. Probe pool of verified Google Cloud ESF frontends and pick the fastest healthy node
+    ranked_candidates: list[tuple[int, int, str]] = []
+    for idx, proxy in enumerate(VERIFIED_SNI_PROXIES):
         if proxy in excluded:
             continue
+        t0 = time.monotonic()
         if test_tls_sni(proxy, "daily-cloudcode-pa.googleapis.com", timeout=1.5) and test_tls_sni(proxy, "cloudcode-pa.googleapis.com", timeout=1.5):
-            return proxy
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            ranked_candidates.append((elapsed_ms, idx, proxy))
+    if ranked_candidates:
+        ranked_candidates.sort(key=lambda item: (item[0], item[1]))
+        return ranked_candidates[0][2]
 
     if fallback_ip not in excluded and test_tls_sni(fallback_ip, "cloudcode-pa.googleapis.com", timeout=2.0):
         return fallback_ip

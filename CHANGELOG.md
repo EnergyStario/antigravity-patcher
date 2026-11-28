@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-11-29
+
+### Fixed
+- **auth,repatch**: isolate IDE and standalone account slots, detect unified OAuth tokens in state.vscdb, and fix switch_to_account restore call.
+- **quota,desktop**: pass standalone appTarget and read activeAccount.id across quota_engine, swarm_bridge, and desktop IPC, keeping switcher timestamps isolated.
+- **network,autopilot**: rotate pinned hosts on ETIMEDOUT and Go connectex timeouts, select lowest-latency SNI nodes, and detect loginError in error_guardian.
+
 ## [1.2.1] - 2026-11-27
 
 ### Added

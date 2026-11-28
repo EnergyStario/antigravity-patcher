@@ -81,9 +81,12 @@ const ERROR_RULES = [
     {
         key: 'tls_expired',
         title: 'Сбой TLS / защищённого соединения',
-        description: 'Разорван TLS handshake до Google API или локального сервера.',
+        description: 'Разорван TLS handshake или таймаут подключения до Google API или локального сервера.',
         patterns: [
             /TLS handshake (?:timeout|error)/i,
+            /Client network socket disconnected before secure TLS connection/i,
+            /connect\s+(?:ECONNREFUSED|ETIMEDOUT)\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443/i,
+            /dial\s+tcp\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443:\s*[^\n]*(?:timed out|did not properly respond|actively refused|i\/o timeout)/i,
             /remote error:\s*tls:/i,
             /CERT_HAS_EXPIRED/i,
             /UNABLE_TO_VERIFY_LEAF_SIGNATURE/i,
@@ -107,9 +110,10 @@ const ERROR_RULES = [
     {
         key: 'auth_failure',
         title: 'Сбой авторизации / инициализации',
-        description: 'Ошибка настройки аккаунта или запуска фонового сервиса модели.',
+        description: 'Ошибка настройки аккаунта, состояния loginError или запуска фонового сервиса модели.',
         patterns: [
             /unexpected issue setting up your account/i,
+            /Auth state changed to:\s*loginError/i,
             /Singleflight refresh failed/i,
             /Language server has not been initialized/i,
         ],

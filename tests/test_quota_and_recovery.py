@@ -5176,6 +5176,89 @@ console.log(JSON.stringify({{ plan, prompt }}));
             self.assertIn("РЕЗЕРВНЫЙ РЕЖИМ РОЯ", res3["prompt"])
             self.assertIn("1–2 файла на воркера", res3["prompt"])
 
+    def test_cross_app_account_isolation_and_error_guardian_login_error(self):
+        """account_switcher + quota_engine keep IDE/standalone active slots & fallback sorting isolated,
+        and error_guardian detects loginError + connect ETIMEDOUT :443."""
+        import importlib.util
+        import json as _json
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tools_dir = Path(tmpdir) / ".antigravity_tools"
+            (tools_dir / "accounts").mkdir(parents=True)
+
+            sw_path = Path(os.getcwd()) / "extensions" / "core" / "account_switcher.py"
+            spec = importlib.util.spec_from_file_location("ag_sw_iso_test", str(sw_path))
+            sw_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(sw_mod)
+
+            orig_dir = sw_mod.AG_TOOLS_DIR
+            sw_mod.AG_TOOLS_DIR = tools_dir
+            try:
+                # 1. Register standalone-only account -> must NOT get ide last_used or leak into IDE fallback
+                with mock.patch.object(sw_mod, "fetch_live_quota", return_value={"tier": "PRO", "claude_percentage": 90, "gemini_percentage": 100}):
+                    sa_acc = sw_mod._ensure_account_registered(
+                        "1//sa-refresh-token",
+                        "standalone_only@example.com",
+                        app_target="standalone",
+                        set_active=True,
+                    )
+                self.assertEqual(sa_acc["last_used"], 0)
+                self.assertGreater(sa_acc["standalone_last_used"], 0)
+                idx = _json.loads((tools_dir / "accounts.json").read_text(encoding="utf-8"))
+                self.assertEqual(idx.get("current_standalone_account_id"), sa_acc["id"])
+                self.assertFalse(idx.get("current_account_id"))
+                self.assertIsNone(sw_mod._get_account_by_index_key("current_account_id"))
+                self.assertEqual(
+                    sw_mod._get_account_by_index_key("current_standalone_account_id")["id"],
+                    sa_acc["id"],
+                )
+
+                # 2. Register IDE-only account -> IDE & standalone slots remain distinct
+                with mock.patch.object(sw_mod, "fetch_live_quota", return_value={"tier": "PRO", "claude_percentage": 80, "gemini_percentage": 100}):
+                    ide_acc = sw_mod._ensure_account_registered(
+                        "1//ide-refresh-token",
+                        "ide_only@example.com",
+                        app_target="ide",
+                        set_active=True,
+                    )
+                self.assertGreater(ide_acc["last_used"], 0)
+                self.assertEqual(ide_acc["standalone_last_used"], 0)
+                self.assertEqual(sw_mod._get_account_by_index_key("current_account_id")["id"], ide_acc["id"])
+                self.assertEqual(
+                    sw_mod._get_account_by_index_key("current_standalone_account_id")["id"],
+                    sa_acc["id"],
+                )
+            finally:
+                sw_mod.AG_TOOLS_DIR = orig_dir
+
+            # 3. quota_engine honors appTarget='standalone' & swarm_bridge uses st.activeAccount.id
+            (tools_dir / "accounts" / f"{sa_acc['id']}.json").write_text(
+                _json.dumps({"email": "standalone_only@example.com", "quota": {"claude_percentage": 0, "gemini_percentage": 95}}),
+                encoding="utf-8",
+            )
+            (tools_dir / "accounts" / f"{ide_acc['id']}.json").write_text(
+                _json.dumps({"email": "ide_only@example.com", "quota": {"claude_percentage": 0, "gemini_percentage": 30}}),
+                encoding="utf-8",
+            )
+            script = f"""
+const path = require('path');
+process.env.AG_TOOLS_DIR = {_json.dumps(str(tools_dir))};
+Object.keys(require.cache).forEach(k => delete require.cache[k]);
+const eng = require(path.join(process.cwd(), 'extensions', 'core', 'quota_engine.js'));
+const bridge = require(path.join(process.cwd(), 'extensions', 'core', 'swarm_bridge.js'));
+const guard = require(path.join(process.cwd(), 'extensions', 'core', 'error_guardian.js'));
+const saPlan = eng.resolveQuotaExhaustionPlan({{ currentModel: 'claude-sonnet-4', currentAccountId: {_json.dumps(sa_acc['id'])}, appTarget: 'standalone' }});
+const bridgeInfo = bridge.loadQuotaPlanSafely([], 'claude-sonnet-4', {{ appTarget: 'standalone' }});
+const clsTimeout = guard.classifyErrorText('request failed, reason: connect ETIMEDOUT 193.233.112.67:443');
+const clsLogin = guard.classifyErrorText('[AntigravityAuthMainService] Auth state changed to: loginError');
+console.log(JSON.stringify({{ saPlan, bridgeInfo, clsTimeout, clsLogin }}));
+"""
+            res = _run_node(script, env_extra={"AG_TOOLS_DIR": str(tools_dir)})
+            self.assertEqual(res["saPlan"]["strategy"], "tier1_model")
+            self.assertEqual(res["saPlan"]["account"]["id"], sa_acc["id"])
+            self.assertEqual(res["bridgeInfo"]["plan"]["account"]["id"], sa_acc["id"])
+            self.assertEqual(res["clsTimeout"]["key"], "tls_expired")
+            self.assertEqual(res["clsLogin"]["key"], "auth_failure")
+
     def test_model_config_user_overrides_win_over_defaults(self):
         """quota_engine.js: user model_config.json overrides always win over built-in defaults.
         Tests: tier_overrides, custom_models, getOrchestratorOrder(), getWorkerModel()."""

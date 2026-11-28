@@ -575,9 +575,15 @@ def _make_error_db() -> List[KnownError]:
 
     def _extract_refused_sni_ips(hits: list) -> set[str]:
         ips: set[str] = set()
+        patterns = (
+            r"connect\s+(?:ECONNREFUSED|ETIMEDOUT)\s+(?!127\.0\.0\.1)(\d{1,3}(?:\.\d{1,3}){3}):443",
+            r"dial\s+tcp\s+(?!127\.0\.0\.1)(\d{1,3}(?:\.\d{1,3}){3}):443:\s*[^\n]*(?:timed out|did not properly respond|actively refused|connection refused|i/o timeout)",
+        )
         for h in hits or ():
-            for m in re.finditer(r"connect\s+ECONNREFUSED\s+(?!127\.0\.0\.1)(\d{1,3}(?:\.\d{1,3}){3}):443", str(h)):
-                ips.add(m.group(1))
+            text = str(h)
+            for pat in patterns:
+                for m in re.finditer(pat, text, re.IGNORECASE):
+                    ips.add(m.group(1))
         return ips
 
     def _is_sni_host_refused_fixed(ctx):
@@ -939,12 +945,13 @@ def _make_error_db() -> List[KnownError]:
         ),
         KnownError(
             key="sni_host_refused",
-            title="Сброс соединения прибитого SNI-сервера (ECONNREFUSED :443)",
+            title="Сброс или таймаут прибитого SNI-сервера (ECONNREFUSED / ETIMEDOUT :443)",
             patterns=[
-                r"connect\s+ECONNREFUSED\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443",
+                r"connect\s+(?:ECONNREFUSED|ETIMEDOUT)\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443",
+                r"dial\s+tcp\s+(?!127\.0\.0\.1)(?:\d{1,3}\.){3}\d{1,3}:443:\s*[^\n]*(?:timed out|did not properly respond|actively refused|connection refused|i/o timeout)",
             ],
             description=(
-                "Закреплённый в hosts SNI-прокси отклонил подключение к порту 443. "
+                "Закреплённый в hosts SNI-прокси отклонил подключение к порту 443 или перестал отвечать по таймауту. "
                 "Требуется автоматическая ротация на другой живой IP-узел из пула."
             ),
             fix_label="Переключить hosts на другой рабочий SNI-узел и сбросить DNS-кэш",

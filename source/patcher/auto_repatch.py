@@ -467,8 +467,8 @@ def _restore_active_session_after_patch() -> list[str]:
     except Exception:
         return restored
 
-    sa_id = idx.get("current_standalone_account_id") or idx.get("current_account_id")
-    ide_id = idx.get("current_account_id") or sa_id
+    sa_id = idx.get("current_standalone_account_id")
+    ide_id = idx.get("current_ide_account_id") or idx.get("current_account_id")
     accounts = idx.get("accounts") or []
 
     def _find_acc(aid: Any) -> dict[str, Any] | None:
@@ -513,12 +513,16 @@ def _restore_active_session_after_patch() -> list[str]:
                 import sqlite3
                 conn = sqlite3.connect(f"file:{vscdb}?mode=ro", uri=True, timeout=2.0)
                 try:
-                    row = conn.execute(
-                        "SELECT value FROM ItemTable WHERE key='antigravityAuthStatus'"
-                    ).fetchone()
+                    rows = conn.execute(
+                        "SELECT value FROM ItemTable WHERE key IN "
+                        "('antigravityAuthStatus', 'antigravityUnifiedStateSync.oauthToken')"
+                    ).fetchall()
                 finally:
                     conn.close()
-                has_auth = bool(row and row[0] and str(row[0]).strip() not in ("", "null", "{}"))
+                has_auth = any(
+                    r and r[0] and str(r[0]).strip() not in ("", "null", "{}")
+                    for r in rows
+                )
                 if not has_auth:
                     sw_path = tools / "account_switcher.py"
                     if sw_path.is_file():
@@ -527,7 +531,13 @@ def _restore_active_session_after_patch() -> list[str]:
                         if spec and spec.loader:
                             mod = importlib.util.module_from_spec(spec)
                             spec.loader.exec_module(mod)
-                            if hasattr(mod, "switch_account") and mod.switch_account(ide_id, app_target="ide"):
+                            sw_ok = False
+                            if hasattr(mod, "switch_to_account"):
+                                sw_res = mod.switch_to_account(ide_id, app_type="ide", restart=False)
+                                sw_ok = bool(sw_res.get("ok")) if isinstance(sw_res, dict) else bool(sw_res)
+                            elif hasattr(mod, "switch_account"):
+                                sw_ok = bool(mod.switch_account(ide_id, app_target="ide"))
+                            if sw_ok:
                                 restored.append("IDE auth session")
             except Exception:
                 pass

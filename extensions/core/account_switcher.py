@@ -428,6 +428,8 @@ def _ensure_account_registered(
         display_name = em_clean.split("@")[0] if em_clean else "Account"
 
     now_ts = int(time.time())
+    ide_ts = now_ts if app_target != "standalone" else 0
+    sa_ts = now_ts if app_target == "standalone" else 0
     new_acc = {
         "id": new_id,
         "email": em_clean,
@@ -435,8 +437,8 @@ def _ensure_account_registered(
         "disabled": False,
         "proxy_disabled": False,
         "created_at": now_ts,
-        "last_used": now_ts,
-        "standalone_last_used": now_ts,
+        "last_used": ide_ts,
+        "standalone_last_used": sa_ts,
         "token": {
             "refresh_token": rt_clean,
             "access_token": "",
@@ -467,8 +469,8 @@ def _ensure_account_registered(
                 "disabled": False,
                 "proxy_disabled": False,
                 "created_at": now_ts,
-                "last_used": now_ts,
-                "standalone_last_used": now_ts,
+                "last_used": ide_ts,
+                "standalone_last_used": sa_ts,
                 "tier": q.get("tier", "PRO"),
                 "claude_percentage": q.get("claude_percentage", 0),
                 "gemini_percentage": q.get("gemini_percentage", 100),
@@ -805,9 +807,17 @@ def _get_active_wincred_account(target_name: str = "gemini:antigravity") -> dict
         CredReadW = ctypes.windll.advapi32.CredReadW
         CredReadW.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(PCREDENTIAL)]
         CredReadW.restype = wintypes.BOOL
+        CredFree = ctypes.windll.advapi32.CredFree
+        CredFree.argtypes = [ctypes.c_void_p]
+        CredFree.restype = None
         pcred = PCREDENTIAL()
         if CredReadW(target_name, 1, 0, ctypes.byref(pcred)):
-            b = bytes(ctypes.string_at(pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize))
+            try:
+                if not pcred.contents.CredentialBlob or pcred.contents.CredentialBlobSize <= 0:
+                    return None
+                b = bytes(ctypes.string_at(pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize))
+            finally:
+                CredFree(pcred)
             d = json.loads(b.decode('utf-8'))
             tok = d.get('token') if isinstance(d.get('token'), dict) else d
             ref_tok = tok.get('refresh_token', '') if isinstance(tok, dict) else ''
@@ -879,14 +889,16 @@ def _get_account_by_index_key(key: str) -> dict | None:
                 return used_sa[0]
             return None
         if key == "current_account_id" and index.get("accounts"):
-            sorted_accs = sorted(index["accounts"], key=lambda a: a.get("last_used", 0), reverse=True)
-            if sorted_accs:
-                cand_id = sorted_accs[0].get("id")
+            used_ide = [a for a in index["accounts"] if (a.get("last_used") or 0) > 0]
+            used_ide.sort(key=lambda a: a.get("last_used", 0), reverse=True)
+            if used_ide:
+                cand_id = used_ide[0].get("id")
                 detail_file = AG_TOOLS_DIR / "accounts" / f"{cand_id}.json"
                 if detail_file.exists():
                     with open(detail_file, "r", encoding="utf-8") as df:
                         return json.load(df)
-                return sorted_accs[0]
+                return used_ide[0]
+            return None
     except Exception:
         pass
     return None

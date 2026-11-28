@@ -407,9 +407,10 @@ function loadModelConfigSafely(extraDirs = []) {
 /**
  * Inspect active quota survival plan and assistant failover policy safely via quota_engine.
  */
-function loadQuotaPlanSafely(extraDirs = [], currentModel = 'claude') {
+function loadQuotaPlanSafely(extraDirs = [], currentModel = 'claude', { appTarget = 'ide' } = {}) {
     const eng = _loadQuotaEngineSafely(extraDirs);
     if (!eng) return { settings: {}, plan: null };
+    const target = appTarget === 'standalone' ? 'standalone' : 'ide';
     let settings = {};
     let plan = null;
     try {
@@ -420,13 +421,14 @@ function loadQuotaPlanSafely(extraDirs = [], currentModel = 'claude') {
     try {
         let currentAccId = '';
         if (typeof eng.loadState === 'function') {
-            const st = eng.loadState({ appTarget: 'ide' });
-            currentAccId = (st && st.active && st.active.id) || '';
+            const st = eng.loadState({ appTarget: target });
+            currentAccId = (st && ((st.activeAccount && st.activeAccount.id) || (st.active && st.active.id))) || '';
         }
         if (typeof eng.resolveQuotaExhaustionPlan === 'function') {
             plan = eng.resolveQuotaExhaustionPlan({
                 currentModel: currentModel || 'claude',
-                currentAccountId: currentAccId
+                currentAccountId: currentAccId,
+                appTarget: target,
             });
         }
     } catch (_) {}
@@ -726,7 +728,8 @@ async function prepareSwarmTask({
     workspacePaths = [],
     extraDirs = [],
     useAffectedTests = true,
-    modelConfig = null
+    modelConfig = null,
+    appTarget = 'ide',
 } = {}) {
     const cleanProject = String(projectPath || '').trim();
     const cleanRequest = String(request || '').trim();
@@ -744,7 +747,7 @@ async function prepareSwarmTask({
 
     const cfg = modelConfig || loadModelConfigSafely(extraDirs);
     const prefOrch = (cfg && Array.isArray(cfg.orchestrator_order) && cfg.orchestrator_order[0]) || '';
-    const quotaInfo = loadQuotaPlanSafely(extraDirs, prefOrch || 'claude');
+    const quotaInfo = loadQuotaPlanSafely(extraDirs, prefOrch || 'claude', { appTarget });
     const cliArgs = ['prepare', '--project', cleanProject, '--request', cleanRequest];
     if (useAffectedTests !== false) cliArgs.push('--use-affected-tests');
     const effectiveOrch = prefOrch || (quotaInfo.plan && quotaInfo.plan.strategy === 'degraded_swarm' ? quotaInfo.plan.model : '');
@@ -788,7 +791,8 @@ async function resumeSwarmTask({
     enginePath = null,
     workspacePaths = [],
     extraDirs = [],
-    modelConfig = null
+    modelConfig = null,
+    appTarget = 'ide',
 } = {}) {
     if (!taskId) return { ok: false, error: 'Не указан task_id для возобновления.' };
     const cp = loadCheckpointSummary(taskId);
@@ -808,7 +812,7 @@ async function resumeSwarmTask({
 
     const cfg = modelConfig || loadModelConfigSafely(extraDirs);
     const refreshedCp = loadCheckpointSummary(taskId) || cp;
-    const quotaInfo = loadQuotaPlanSafely(extraDirs, (refreshedCp && refreshedCp.orchestrator_model) || 'claude');
+    const quotaInfo = loadQuotaPlanSafely(extraDirs, (refreshedCp && refreshedCp.orchestrator_model) || 'claude', { appTarget });
     const dispatchPrompt = buildSwarmDispatchPrompt({
         taskId,
         projectPath: targetProject,
@@ -2221,14 +2225,16 @@ async function handleSwarmAction(op, payload = {}, hostOpts = {}) {
                 request: data.request,
                 workspacePaths,
                 extraDirs,
-                useAffectedTests: data.useAffectedTests !== false
+                useAffectedTests: data.useAffectedTests !== false,
+                appTarget: hostOpts.appTarget || data.appTarget || 'ide',
             });
         case 'resume':
             return resumeSwarmTask({
                 taskId: data.taskId,
                 projectPath: data.projectPath,
                 workspacePaths,
-                extraDirs
+                extraDirs,
+                appTarget: hostOpts.appTarget || data.appTarget || 'ide',
             });
         case 'cleanup':
             return cleanupSwarmTask({

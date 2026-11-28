@@ -2,7 +2,7 @@
   "name": "ag-toolkit",
   "displayName": "Antigravity Assistant",
   "description": "Быстрое переключение аккаунтов, мониторинг квот и статуса сети в строке состояния Antigravity IDE.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "publisher": "energystar",
   "icon": "icon.png",
   "license": "GPL-3.0",

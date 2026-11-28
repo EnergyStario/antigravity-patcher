@@ -764,5 +764,150 @@ def test_healthy_ide_with_hidden_panel_and_handle_auth_refresh_does_not_restart(
     rest_mock.assert_not_called()
 
 
+def test_restore_active_session_isolates_ide_and_recognizes_unified_oauth_token(tmp_path: Path, monkeypatch):
+    import sqlite3
+    from patcher import auto_repatch
+
+    ag_tools = tmp_path / ".antigravity_tools"
+    ag_tools.mkdir(parents=True)
+    monkeypatch.setenv("AG_TOOLS_DIR", str(ag_tools))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    # Only standalone has an active account; IDE account slot is absent and must NOT borrow sa_id.
+    (ag_tools / "accounts.json").write_text(
+        json.dumps({
+            "accounts": [{"id": "sa-acc", "email": "standalone@example.com"}],
+            "current_standalone_account_id": "sa-acc",
+        }),
+        encoding="utf-8",
+    )
+    sa_storage_dir = tmp_path / "antigravity"
+    sa_storage_dir.mkdir(parents=True)
+    (sa_storage_dir / "app_storage.json").write_text("{}", encoding="utf-8")
+
+    # IDE state.vscdb uses modern antigravityUnifiedStateSync.oauthToken (no legacy antigravityAuthStatus).
+    gs_dir = tmp_path / "Antigravity IDE" / "User" / "globalStorage"
+    gs_dir.mkdir(parents=True)
+    vscdb = gs_dir / "state.vscdb"
+    con = sqlite3.connect(str(vscdb))
+    con.execute("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+    con.execute(
+        "INSERT INTO ItemTable VALUES (?, ?)",
+        ("antigravityUnifiedStateSync.oauthToken", "opaque-unified-token-blob"),
+    )
+    con.commit()
+    con.close()
+
+    (ag_tools / "account_switcher.py").write_text(
+        "calls = []\n"
+        "def switch_to_account(target_id, app_type='ide', restart=True):\n"
+        "    calls.append((target_id, app_type, restart))\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+
+    restored = auto_repatch._restore_active_session_after_patch()
+    assert restored == ["Desktop onboarding state"]
+
+    # Even if unified token is cleared later, without current_ide/current_account_id it still must NOT borrow sa-acc.
+    con = sqlite3.connect(str(vscdb))
+    con.execute("DELETE FROM ItemTable")
+    con.commit()
+    con.close()
+    auto_repatch._restore_active_session_after_patch()
+
+    # Now register a separate IDE account with unified token present -> must NOT overwrite IDE session.
+    (ag_tools / "accounts.json").write_text(
+        json.dumps({
+            "accounts": [
+                {"id": "sa-acc", "email": "standalone@example.com"},
+                {"id": "ide-acc", "email": "ide@example.com"},
+            ],
+            "current_standalone_account_id": "sa-acc",
+            "current_ide_account_id": "ide-acc",
+        }),
+        encoding="utf-8",
+    )
+    con = sqlite3.connect(str(vscdb))
+    con.execute(
+        "INSERT INTO ItemTable VALUES (?, ?)",
+        ("antigravityUnifiedStateSync.oauthToken", "opaque-unified-token-blob"),
+    )
+    con.commit()
+    con.close()
+    assert "IDE auth session" not in auto_repatch._restore_active_session_after_patch()
+
+    # Clear IDE vscdb token -> restores strictly 'ide-acc' (never 'sa-acc') via switch_to_account(restart=False).
+    con = sqlite3.connect(str(vscdb))
+    con.execute("DELETE FROM ItemTable")
+    con.commit()
+    con.close()
+    # Spy on actual file write by recording calls to disk inside helper script.
+    spy_log = tmp_path / "switch_calls.jsonl"
+    (ag_tools / "account_switcher.py").write_text(
+        "import json, pathlib\n"
+        f"LOG = pathlib.Path({json.dumps(str(spy_log))})\n"
+        "def switch_to_account(target_id, app_type='ide', restart=True):\n"
+        "    with LOG.open('a', encoding='utf-8') as f:\n"
+        "        f.write(json.dumps([target_id, app_type, restart]) + '\\n')\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    restored2 = auto_repatch._restore_active_session_after_patch()
+    assert "IDE auth session" in restored2
+    lines = [json.loads(line) for line in spy_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert lines == [["ide-acc", "ide", False]]
+
+
+def test_sni_host_timeout_rotates_and_picks_fastest_node():
+    from patcher import diagnostics, hosts_pin
+
+    # 1. discover_sni_proxy_ip picks lowest-latency healthy node in VERIFIED_SNI_PROXIES
+    real_monotonic = hosts_pin.time.monotonic
+    tick = {"v": 0.0}
+
+    def fake_monotonic():
+        return tick["v"]
+
+    def fake_tls(ip: str, domain: str = "cloudcode-pa.googleapis.com", timeout: float = 2.0) -> bool:
+        tick["v"] += 0.08 if ip == "193.233.112.67" else 0.015
+        return True
+
+    with mock.patch.object(hosts_pin, "DISCOVERY_RESOLVERS", []), \
+         mock.patch.object(hosts_pin, "VERIFIED_SNI_PROXIES", ["193.233.112.67", "5.175.161.40"]), \
+         mock.patch.object(hosts_pin.time, "monotonic", side_effect=fake_monotonic), \
+         mock.patch.object(hosts_pin, "test_tls_sni", side_effect=fake_tls):
+        picked = hosts_pin.discover_sni_proxy_ip()
+        assert picked == "5.175.161.40"
+
+    # 2. sni_host_refused detects ETIMEDOUT & Go connectex timeouts and rotates away from 193.233.112.67
+    err_db = diagnostics._make_error_db()
+    by_key = {ke.key: ke for ke in err_db}
+    sni_ke = by_key["sni_host_refused"]
+    etimedout_line = (
+        "2026-11-28 23:28:52.175 [error] [AntigravityAuthMainService] Error refreshing auth state: "
+        "FetchError: request to https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist failed, "
+        "reason: connect ETIMEDOUT 193.233.112.67:443"
+    )
+    go_timeout_line = (
+        "dial tcp 193.233.112.67:443: connectex: A connection attempt failed because the connected party "
+        "did not properly respond after a period of time, or established connection failed because connected host has failed to respond."
+    )
+    assert sni_ke.matches(etimedout_line)
+    assert sni_ke.matches(go_timeout_line)
+    assert not sni_ke.matches("connect ETIMEDOUT 127.0.0.1:443")
+
+    ctx = {"_hits_by_key": {"sni_host_refused": [f"[auth.log] {etimedout_line}"]}}
+    if sys.platform == "win32":
+        with mock.patch.object(hosts_pin, "is_hosts_pinned", return_value=(True, "193.233.112.67")), \
+             mock.patch.object(hosts_pin, "enable_hosts_pinning", return_value=(True, "ok")) as pin_mock, \
+             mock.patch.object(diagnostics, "_heal_google_connectivity", return_value={"connectivity_ok": True}):
+            assert sni_ke.is_already_fixed_fn(ctx) is False
+            assert sni_ke.fix_fn(ctx) is True
+            pin_mock.assert_called_once()
+            assert "193.233.112.67" in (pin_mock.call_args.kwargs.get("exclude_ips") or set())
+
+
+
 
 

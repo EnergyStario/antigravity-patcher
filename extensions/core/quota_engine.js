@@ -247,9 +247,10 @@ function getWorkerModel() {
  * @param {string} [currentAccountId]
  * @returns {Array<object>}
  */
-function getBestAccountsForModel(modelId, currentAccountId = '') {
+function getBestAccountsForModel(modelId, currentAccountId = '', { appTarget = 'ide' } = {}) {
     const tier = getModelTier(modelId);
-    const state = loadState({ appTarget: 'ide' });
+    const target = appTarget === 'standalone' ? 'standalone' : 'ide';
+    const state = loadState({ appTarget: target });
     if (!state.ok || !Array.isArray(state.accounts)) return [];
 
     const others = state.accounts.filter(
@@ -292,14 +293,15 @@ function getModelPoolQuota(account, modelId) {
  *   2) 'tier1_model': switch to another Tier-1 smart model pool (e.g. Gemini 2.5 Pro / Argon) with remaining quota
  *   3) 'degraded_swarm': fallback to Flash + strict 1-2 file atomic steps & mandatory tests when ALL Tier-1 hit 0%
  */
-function resolveQuotaExhaustionPlan({ currentModel = 'claude', currentAccountId = '', minQuota = 1 } = {}) {
-    const state = loadState({ appTarget: 'ide' });
+function resolveQuotaExhaustionPlan({ currentModel = 'claude', currentAccountId = '', minQuota = 1, appTarget = 'ide' } = {}) {
+    const target = appTarget === 'standalone' ? 'standalone' : 'ide';
+    const state = loadState({ appTarget: target });
     const accounts = (state.ok && Array.isArray(state.accounts)) ? state.accounts.filter((a) => a && a.id) : [];
     const currentPool = getModelPoolName(currentModel);
     const threshold = Math.max(1, Number(minQuota) || 1);
 
     // 1. Other account with remaining quota in the current model pool
-    const sameModelCandidates = getBestAccountsForModel(currentModel, currentAccountId)
+    const sameModelCandidates = getBestAccountsForModel(currentModel, currentAccountId, { appTarget: target })
         .filter((a) => getModelPoolQuota(a, currentModel) >= threshold);
     if (sameModelCandidates.length > 0) {
         const best = sameModelCandidates[0];
@@ -316,7 +318,7 @@ function resolveQuotaExhaustionPlan({ currentModel = 'claude', currentAccountId 
     }
 
     // 2. Another smart Tier-1 model pool on current account first, then on any other account
-    const currentAcc = accounts.find((a) => a.id === currentAccountId) || state.active || null;
+    const currentAcc = accounts.find((a) => a.id === currentAccountId) || state.activeAccount || state.active || null;
     const orderedAccounts = currentAcc
         ? [currentAcc, ...accounts.filter((a) => a.id !== currentAcc.id)]
         : accounts;
